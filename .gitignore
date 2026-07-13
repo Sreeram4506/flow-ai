@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+dist/
+.next/
+frontend/.next/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Coverage
+coverage/
+
+# Build
+*.tsbuildinfo
+
+# Docker volumes
+postgres_data/
+redis_data/
+pgadmin_data/
+
+# Uploads (local dev)
+uploads/

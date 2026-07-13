@@ -1,0 +1,1412 @@
+// ============================================================
+// Flow – Enterprise SaaS Project Management Platform
+// Prisma Schema – MongoDB
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  SUPER_ADMIN
+  OWNER
+  ADMIN
+  PROJECT_MANAGER
+  FINANCE_MANAGER
+  EMPLOYEE
+  CLIENT
+}
+
+enum OrgMemberStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum LeadStage {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL_SENT
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum LeadSource {
+  WEBSITE
+  REFERRAL
+  SOCIAL_MEDIA
+  COLD_CALL
+  EMAIL
+  ADVERTISEMENT
+  OTHER
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+  ARCHIVED
+}
+
+enum ProjectPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+  CRITICAL
+}
+
+enum TaskStatus {
+  BACKLOG
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  VIEWED
+  APPROVED
+  REJECTED
+  REVISION_REQUESTED
+  EXPIRED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  VIEWED
+  PAID
+  PARTIAL
+  OVERDUE
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  STRIPE
+  RAZORPAY
+  PAYPAL
+  BANK_TRANSFER
+  CASH
+  CHECK
+  OTHER
+}
+
+enum ExpenseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REIMBURSED
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum LeaveType {
+  CASUAL
+  SICK
+  VACATION
+  MATERNITY
+  PATERNITY
+  UNPAID
+  OTHER
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  WORK_FROM_HOME
+  ON_LEAVE
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_COMPLETED
+  TASK_COMMENT
+  PROJECT_UPDATE
+  INVOICE_SENT
+  INVOICE_PAID
+  PAYMENT_RECEIVED
+  QUOTATION_APPROVED
+  QUOTATION_REJECTED
+  LEAD_UPDATE
+  TEAM_INVITE
+  MENTION
+  SYSTEM
+  REMINDER
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum BillingCycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum Currency {
+  USD
+  EUR
+  GBP
+  INR
+  AUD
+  CAD
+  JPY
+  CNY
+  SGD
+  AED
+}
+
+enum FileType {
+  IMAGE
+  DOCUMENT
+  SPREADSHEET
+  PRESENTATION
+  PDF
+  VIDEO
+  AUDIO
+  ARCHIVE
+  OTHER
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  IMPORT
+  PERMISSION_CHANGE
+}
+
+// ============================================================
+// CORE: USERS & AUTHENTICATION
+// ============================================================
+
+model User {
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  email           String    @unique
+  passwordHash    String?
+  firstName       String
+  lastName        String
+  avatar          String?
+  phone           String?
+  timezone        String    @default("UTC")
+  locale          String    @default("en")
+  isEmailVerified Boolean   @default(false)
+  isActive        Boolean   @default(true)
+  isSuperAdmin    Boolean   @default(false)
+  lastLoginAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // OAuth
+  googleId    String? @unique
+  githubId    String? @unique
+  microsoftId String? @unique
+
+  // Relations
+  refreshTokens  RefreshToken[]
+  passwordResets PasswordReset[]
+  magicLinks     MagicLink[]
+  twoFactorAuth  TwoFactorAuth?
+  sessions       Session[]
+  devices        Device[]
+
+  organizationMembers OrganizationMember[]
+  teamMembers         TeamMember[]
+  projectMembers      ProjectMember[]
+  assignedTasks       Task[]               @relation("TaskAssignee")
+  createdTasks        Task[]               @relation("TaskCreator")
+  taskComments        TaskComment[]
+  timeEntries         TimeEntry[]
+  createdQuotations   Quotation[]
+  createdInvoices     Invoice[]
+  notifications       Notification[]
+  auditLogs           AuditLog[]
+  leaveRequests       LeaveRequest[]
+  attendances         Attendance[]
+  chatMessages        ChatMessage[]
+  chatChannelMembers  ChatChannelMember[]
+  leadActivities      LeadActivity[]
+  createdLeads        Lead[]
+  createdProjects     Project[]            @relation("ProjectCreator")
+  createdClients      Client[]
+  documents           Document[]           @relation("DocumentUploader")
+  expenses            Expense[]            @relation("ExpenseSubmitter")
+  approvedExpenses    Expense[]            @relation("ExpenseApprover")
+  employeeProfile     Employee?
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  token      String   @unique
+  userId     String   @db.ObjectId
+  deviceInfo String?
+  ipAddress  String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model PasswordReset {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  token     String    @unique
+  userId    String    @db.ObjectId
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("password_resets")
+}
+
+model MagicLink {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  token     String    @unique
+  userId    String    @db.ObjectId
+  email     String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("magic_links")
+}
+
+model TwoFactorAuth {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String   @unique @db.ObjectId
+  secret      String
+  isEnabled   Boolean  @default(false)
+  backupCodes String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("two_factor_auth")
+}
+
+model Session {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String   @db.ObjectId
+  token        String   @unique
+  ipAddress    String?
+  userAgent    String?
+  deviceId     String?
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Device {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String   @db.ObjectId
+  deviceName String
+  deviceType String
+  browser    String?
+  os         String?
+  ipAddress  String?
+  isTrusted  Boolean  @default(false)
+  lastUsedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("devices")
+}
+
+// ============================================================
+// MULTI-TENANT: ORGANIZATIONS & TEAMS
+// ============================================================
+
+model Organization {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  name         String
+  slug         String   @unique
+  logo         String?
+  website      String?
+  email        String?
+  phone        String?
+  address      String?
+  city         String?
+  state        String?
+  country      String?
+  zipCode      String?
+  taxId        String?
+  currency     Currency @default(USD)
+  timezone     String   @default("UTC")
+  locale       String   @default("en")
+  customDomain String?  @unique
+  brandColor   String?  @default("#6366f1")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  members           OrganizationMember[]
+  teams             Team[]
+  clients           Client[]
+  leads             Lead[]
+  projects          Project[]
+  tasks             Task[]
+  quotations        Quotation[]
+  invoices          Invoice[]
+  payments          Payment[]
+  expenses          Expense[]
+  expenseCategories ExpenseCategory[]
+  employees         Employee[]
+  documents         Document[]
+  folders           Folder[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  subscription      Subscription?
+  webhooks          Webhook[]
+  apiKeys           ApiKey[]
+  chatChannels      ChatChannel[]
+  customFields      CustomField[]
+  tags              Tag[]
+  invoiceCounter    Int                  @default(0)
+  quotationCounter  Int                  @default(0)
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String          @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String          @db.ObjectId
+  userId         String          @db.ObjectId
+  role           UserRole        @default(EMPLOYEE)
+  status         OrgMemberStatus @default(ACTIVE)
+  inviteEmail    String?
+  inviteToken    String?         @unique
+  joinedAt       DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user         User         @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("organization_members")
+}
+
+model Team {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String   @db.ObjectId
+  name           String
+  description    String?
+  color          String?  @default("#6366f1")
+  icon           String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  members      TeamMember[]
+  projects     Project[]
+
+  @@index([organizationId])
+  @@map("teams")
+}
+
+model TeamMember {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  teamId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  isLead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([teamId, userId])
+  @@index([teamId])
+  @@index([userId])
+  @@map("team_members")
+}
+
+// ============================================================
+// CRM: CLIENTS & LEADS
+// ============================================================
+
+model Client {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String   @db.ObjectId
+  companyName    String
+  contactPerson  String?
+  email          String?
+  phone          String?
+  website        String?
+  address        String?
+  city           String?
+  state          String?
+  country        String?
+  zipCode        String?
+  taxId          String?
+  billingEmail   String?
+  billingAddress String?
+  notes          String?
+  isActive       Boolean  @default(true)
+  createdById    String   @db.ObjectId
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy    User            @relation(fields: [createdById], references: [id])
+  contacts     ClientContact[]
+  projects     Project[]
+  quotations   Quotation[]
+  invoices     Invoice[]
+  payments     Payment[]
+  documentIds  String[]        @db.ObjectId
+  documents    Document[]      @relation("ClientDocuments", fields: [documentIds], references: [id])
+
+  @@index([organizationId])
+  @@index([companyName])
+  @@map("clients")
+}
+
+model ClientContact {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  clientId  String   @db.ObjectId
+  name      String
+  email     String?
+  phone     String?
+  role      String?
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([clientId])
+  @@map("client_contacts")
+}
+
+model Lead {
+  id                String     @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId    String     @db.ObjectId
+  companyName       String
+  contactName       String
+  email             String?
+  phone             String?
+  website           String?
+  source            LeadSource @default(OTHER)
+  stage             LeadStage  @default(NEW)
+  value             Float?
+  currency          Currency   @default(USD)
+  probability       Int?       @default(0)
+  aiScore           Int?
+  notes             String?
+  expectedCloseDate DateTime?
+  closedAt          DateTime?
+  lostReason        String?
+  assignedToId      String?
+  createdById       String     @db.ObjectId
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy    User           @relation(fields: [createdById], references: [id])
+  activities   LeadActivity[]
+
+  @@index([organizationId])
+  @@index([stage])
+  @@index([createdById])
+  @@map("leads")
+}
+
+model LeadActivity {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  leadId      String    @db.ObjectId
+  userId      String    @db.ObjectId
+  type        String // call, email, meeting, note, follow_up
+  title       String
+  description String?
+  scheduledAt DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([leadId])
+  @@map("lead_activities")
+}
+
+// ============================================================
+// PROJECTS & TASKS
+// ============================================================
+
+model Project {
+  id             String          @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String          @db.ObjectId
+  name           String
+  description    String?
+  slug           String
+  status         ProjectStatus   @default(PLANNING)
+  priority       ProjectPriority @default(MEDIUM)
+  budget         Float?
+  spentAmount    Float?          @default(0)
+  currency       Currency        @default(USD)
+  startDate      DateTime?
+  deadline       DateTime?
+  completedAt    DateTime?
+  progress       Int             @default(0)
+  isRecurring    Boolean         @default(false)
+  recurringCron  String?
+  clientId       String?         @db.ObjectId
+  teamId         String?         @db.ObjectId
+  createdById    String          @db.ObjectId
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  client       Client?         @relation(fields: [clientId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  team         Team?           @relation(fields: [teamId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy    User            @relation("ProjectCreator", fields: [createdById], references: [id])
+  members      ProjectMember[]
+  tasks        Task[]
+  milestones   Milestone[]
+  quotations   Quotation[]
+  invoices     Invoice[]
+  documentIds  String[]        @db.ObjectId
+  documents    Document[]      @relation("ProjectDocuments", fields: [documentIds], references: [id])
+  timeEntries  TimeEntry[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@index([status])
+  @@index([clientId])
+  @@map("projects")
+}
+
+model ProjectMember {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  projectId String   @db.ObjectId
+  userId    String   @db.ObjectId
+  role      String   @default("member") // member, lead, viewer
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user    User    @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+  @@map("project_members")
+}
+
+model Milestone {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  projectId   String    @db.ObjectId
+  title       String
+  description String?
+  dueDate     DateTime?
+  completedAt DateTime?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tasks   Task[]
+
+  @@index([projectId])
+  @@map("milestones")
+}
+
+model Task {
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String       @db.ObjectId
+  projectId      String       @db.ObjectId
+  milestoneId    String?      @db.ObjectId
+  parentTaskId   String?      @db.ObjectId
+  title          String
+  description    String?
+  status         TaskStatus   @default(TODO)
+  priority       TaskPriority @default(MEDIUM)
+  assigneeId     String?      @db.ObjectId
+  createdById    String       @db.ObjectId
+  dueDate        DateTime?
+  startDate      DateTime?
+  completedAt    DateTime?
+  estimatedHours Float?
+  position       Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  project      Project               @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  milestone    Milestone?            @relation(fields: [milestoneId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  parentTask   Task?                 @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subtasks     Task[]                @relation("SubTasks")
+  assignee     User?                 @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy    User                  @relation("TaskCreator", fields: [createdById], references: [id])
+  comments     TaskComment[]
+  attachments  TaskAttachment[]
+  checklists   TaskChecklist[]
+  timeEntries  TimeEntry[]
+  labels       TaskLabelAssignment[]
+
+  // Dependencies
+  dependsOn  TaskDependency[] @relation("DependentTask")
+  dependedBy TaskDependency[] @relation("DependencyTask")
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([assigneeId])
+  @@index([status])
+  @@index([parentTaskId])
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id               String @id @default(auto()) @map("_id") @db.ObjectId
+  dependentTaskId  String @db.ObjectId
+  dependencyTaskId String @db.ObjectId
+  type             String @default("finish_to_start") // finish_to_start, start_to_start, finish_to_finish, start_to_finish
+
+  dependentTask  Task @relation("DependentTask", fields: [dependentTaskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  dependencyTask Task @relation("DependencyTask", fields: [dependencyTaskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([dependentTaskId, dependencyTaskId])
+  @@map("task_dependencies")
+}
+
+model TaskComment {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  taskId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+model TaskAttachment {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  taskId    String   @db.ObjectId
+  fileName  String
+  fileUrl   String
+  fileSize  Int
+  fileType  FileType @default(OTHER)
+  mimeType  String?
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([taskId])
+  @@map("task_attachments")
+}
+
+model TaskChecklist {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  taskId      String   @db.ObjectId
+  title       String
+  isCompleted Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([taskId])
+  @@map("task_checklists")
+}
+
+model TaskLabel {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String   @db.ObjectId
+  name           String
+  color          String   @default("#6366f1")
+  createdAt      DateTime @default(now())
+
+  assignments TaskLabelAssignment[]
+
+  @@unique([organizationId, name])
+  @@map("task_labels")
+}
+
+model TaskLabelAssignment {
+  id      String @id @default(auto()) @map("_id") @db.ObjectId
+  taskId  String @db.ObjectId
+  labelId String @db.ObjectId
+
+  task  Task      @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  label TaskLabel @relation(fields: [labelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([taskId, labelId])
+  @@map("task_label_assignments")
+}
+
+// ============================================================
+// TIME TRACKING
+// ============================================================
+
+model TimeEntry {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String    @db.ObjectId
+  taskId      String?   @db.ObjectId
+  projectId   String?   @db.ObjectId
+  description String?
+  startTime   DateTime
+  endTime     DateTime?
+  duration    Int? // in seconds
+  isBillable  Boolean   @default(true)
+  isRunning   Boolean   @default(false)
+  hourlyRate  Float?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id])
+  task    Task?    @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([taskId])
+  @@index([projectId])
+  @@map("time_entries")
+}
+
+// ============================================================
+// FINANCE: QUOTATIONS, INVOICES, PAYMENTS, EXPENSES
+// ============================================================
+
+model Quotation {
+  id              String          @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId  String          @db.ObjectId
+  quotationNumber String
+  clientId        String          @db.ObjectId
+  projectId       String?         @db.ObjectId
+  status          QuotationStatus @default(DRAFT)
+  currency        Currency        @default(USD)
+  subtotal        Float           @default(0)
+  taxRate         Float?
+  taxAmount       Float           @default(0)
+  discountRate    Float?
+  discountAmount  Float           @default(0)
+  total           Float           @default(0)
+  terms           String?
+  notes           String?
+  validUntil      DateTime?
+  sentAt          DateTime?
+  viewedAt        DateTime?
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  signatureUrl    String?
+  signedByName    String?
+  signedAt        DateTime?
+  createdById     String          @db.ObjectId
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  organization     Organization    @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  client           Client          @relation(fields: [clientId], references: [id])
+  project          Project?        @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy        User            @relation(fields: [createdById], references: [id])
+  items            QuotationItem[]
+  convertedInvoice Invoice?        @relation("QuotationToInvoice")
+
+  @@unique([organizationId, quotationNumber])
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([status])
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  quotationId String @db.ObjectId
+  description String
+  quantity    Float  @default(1)
+  unitPrice   Float
+  amount      Float
+  sortOrder   Int    @default(0)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([quotationId])
+  @@map("quotation_items")
+}
+
+model Invoice {
+  id             String        @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String        @db.ObjectId
+  invoiceNumber  String
+  clientId       String        @db.ObjectId
+  projectId      String?       @db.ObjectId
+  quotationId    String?       @unique @db.ObjectId
+  status         InvoiceStatus @default(DRAFT)
+  currency       Currency      @default(USD)
+  subtotal       Float         @default(0)
+  taxRate        Float?
+  taxAmount      Float         @default(0)
+  discountRate   Float?
+  discountAmount Float         @default(0)
+  total          Float         @default(0)
+  amountPaid     Float         @default(0)
+  amountDue      Float         @default(0)
+  dueDate        DateTime?
+  terms          String?
+  notes          String?
+  sentAt         DateTime?
+  viewedAt       DateTime?
+  paidAt         DateTime?
+  isRecurring    Boolean       @default(false)
+  recurringCron  String?
+  nextRecurDate  DateTime?
+  paymentLink    String?
+  createdById    String        @db.ObjectId
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  client        Client        @relation(fields: [clientId], references: [id])
+  project       Project?      @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fromQuotation Quotation?    @relation("QuotationToInvoice", fields: [quotationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy     User          @relation(fields: [createdById], references: [id])
+  items         InvoiceItem[]
+  payments      Payment[]
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([status])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  invoiceId   String @db.ObjectId
+  description String
+  quantity    Float  @default(1)
+  unitPrice   Float
+  amount      Float
+  sortOrder   Int    @default(0)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+model Payment {
+  id              String        @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId  String        @db.ObjectId
+  invoiceId       String?       @db.ObjectId
+  clientId        String?       @db.ObjectId
+  amount          Float
+  currency        Currency      @default(USD)
+  status          PaymentStatus @default(PENDING)
+  method          PaymentMethod @default(BANK_TRANSFER)
+  transactionId   String?
+  gatewayResponse Json?
+  notes           String?
+  paidAt          DateTime?
+  refundedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  invoice      Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId])
+  @@index([invoiceId])
+  @@index([status])
+  @@map("payments")
+}
+
+model Expense {
+  id             String        @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String        @db.ObjectId
+  categoryId     String?       @db.ObjectId
+  title          String
+  description    String?
+  amount         Float
+  currency       Currency      @default(USD)
+  status         ExpenseStatus @default(PENDING)
+  date           DateTime
+  receiptUrl     String?
+  vendorName     String?
+  submittedById  String        @db.ObjectId
+  approvedById   String?       @db.ObjectId
+  approvedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  category     ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  submittedBy  User             @relation("ExpenseSubmitter", fields: [submittedById], references: [id])
+  approvedBy   User?            @relation("ExpenseApprover", fields: [approvedById], references: [id])
+
+  @@index([organizationId])
+  @@index([categoryId])
+  @@index([status])
+  @@map("expenses")
+}
+
+model ExpenseCategory {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String   @db.ObjectId
+  name           String
+  color          String?  @default("#6366f1")
+  icon           String?
+  budgetLimit    Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  expenses     Expense[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("expense_categories")
+}
+
+// ============================================================
+// HR MODULE
+// ============================================================
+
+model Employee {
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId           String    @unique @db.ObjectId
+  organizationId   String    @db.ObjectId
+  employeeId       String?
+  designation      String?
+  department       String?
+  joiningDate      DateTime?
+  salary           Float?
+  bankName         String?
+  bankAccount      String?
+  emergencyContact String?
+  emergencyPhone   String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId])
+  @@map("employees")
+}
+
+model Attendance {
+  id         String           @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String           @db.ObjectId
+  date       DateTime         @db.Date
+  status     AttendanceStatus @default(PRESENT)
+  checkIn    DateTime?
+  checkOut   DateTime?
+  totalHours Float?
+  notes      String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
+  @@map("attendances")
+}
+
+model LeaveRequest {
+  id           String      @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String      @db.ObjectId
+  type         LeaveType
+  startDate    DateTime
+  endDate      DateTime
+  totalDays    Float
+  reason       String?
+  status       LeaveStatus @default(PENDING)
+  approvedById String?     @db.ObjectId
+  approvedAt   DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([status])
+  @@map("leave_requests")
+}
+
+// ============================================================
+// DOCUMENTS
+// ============================================================
+
+model Folder {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String   @db.ObjectId
+  parentId       String?  @db.ObjectId
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  parent       Folder?      @relation("SubFolders", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subFolders   Folder[]     @relation("SubFolders")
+  documents    Document[]
+
+  @@index([organizationId])
+  @@index([parentId])
+  @@map("folders")
+}
+
+model Document {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String   @db.ObjectId
+  folderId       String?  @db.ObjectId
+  name           String
+  description    String?
+  fileUrl        String
+  fileSize       Int
+  fileType       FileType @default(OTHER)
+  mimeType       String?
+  version        Int      @default(1)
+  isPublic       Boolean  @default(false)
+  uploadedById   String   @db.ObjectId
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  folder       Folder?           @relation(fields: [folderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  uploadedBy   User              @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  versions     DocumentVersion[]
+  clientIds    String[]          @db.ObjectId
+  clients      Client[]          @relation("ClientDocuments", fields: [clientIds], references: [id])
+  projectIds   String[]          @db.ObjectId
+  projects     Project[]         @relation("ProjectDocuments", fields: [projectIds], references: [id])
+
+  @@index([organizationId])
+  @@index([folderId])
+  @@map("documents")
+}
+
+model DocumentVersion {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  documentId String   @db.ObjectId
+  version    Int
+  fileUrl    String
+  fileSize   Int
+  changeNote String?
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([documentId])
+  @@map("document_versions")
+}
+
+// ============================================================
+// NOTIFICATIONS & COMMUNICATION
+// ============================================================
+
+model Notification {
+  id             String           @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String?          @db.ObjectId
+  userId         String           @db.ObjectId
+  type           NotificationType @default(SYSTEM)
+  title          String
+  message        String
+  data           Json?
+  isRead         Boolean          @default(false)
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user         User          @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId, isRead])
+  @@index([organizationId])
+  @@map("notifications")
+}
+
+model ChatChannel {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId  String   @db.ObjectId
+  name            String?
+  isDirectMessage Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  members      ChatChannelMember[]
+  messages     ChatMessage[]
+
+  @@index([organizationId])
+  @@map("chat_channels")
+}
+
+model ChatChannelMember {
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  channelId  String    @db.ObjectId
+  userId     String    @db.ObjectId
+  lastReadAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user    User        @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([channelId, userId])
+  @@map("chat_channel_members")
+}
+
+model ChatMessage {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  channelId String   @db.ObjectId
+  userId    String   @db.ObjectId
+  content   String
+  metadata  Json?
+  isEdited  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user    User        @relation(fields: [userId], references: [id])
+
+  @@index([channelId])
+  @@map("chat_messages")
+}
+
+// ============================================================
+// SAAS: SUBSCRIPTIONS, WEBHOOKS, API KEYS
+// ============================================================
+
+model SubscriptionPlan {
+  id            String       @id @default(auto()) @map("_id") @db.ObjectId
+  name          String       @unique
+  description   String?
+  price         Float
+  currency      Currency     @default(USD)
+  billingCycle  BillingCycle @default(MONTHLY)
+  maxMembers    Int          @default(5)
+  maxProjects   Int          @default(10)
+  maxStorage    Int          @default(1024) // MB
+  features      Json?
+  isActive      Boolean      @default(true)
+  stripePriceId String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id                   String             @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId       String             @unique @db.ObjectId
+  planId               String             @db.ObjectId
+  status               SubscriptionStatus @default(TRIALING)
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  trialEndsAt          DateTime?
+  cancelledAt          DateTime?
+  stripeSubscriptionId String?            @unique
+  stripeCustomerId     String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  plan         SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  @@map("subscriptions")
+}
+
+model Webhook {
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId  String    @db.ObjectId
+  url             String
+  events          String[] // e.g., ["invoice.created", "payment.received"]
+  secret          String
+  isActive        Boolean   @default(true)
+  lastTriggeredAt DateTime?
+  failureCount    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId])
+  @@map("webhooks")
+}
+
+model ApiKey {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String    @db.ObjectId
+  name           String
+  key            String    @unique
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("api_keys")
+}
+
+// ============================================================
+// AUDIT LOGS
+// ============================================================
+
+model AuditLog {
+  id             String      @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String?     @db.ObjectId
+  userId         String?     @db.ObjectId
+  action         AuditAction
+  entity         String // e.g., "Project", "Invoice", "Task"
+  entityId       String?
+  oldData        Json?
+  newData        Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// TAGS & CUSTOM FIELDS
+// ============================================================
+
+model Tag {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String   @db.ObjectId
+  name           String
+  color          String   @default("#6366f1")
+  createdAt      DateTime @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assignments  TagAssignment[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("tags")
+}
+
+model TagAssignment {
+  id         String @id @default(auto()) @map("_id") @db.ObjectId
+  tagId      String @db.ObjectId
+  entityType String // "client", "lead", "project", "task", "expense", "document"
+  entityId   String
+
+  tag Tag @relation(fields: [tagId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // Polymorphic relation – entityType + entityId reference the target entity
+  // No explicit FK constraints since Prisma doesn't support multi-target FKs from one column
+
+  @@unique([tagId, entityType, entityId])
+  @@index([entityType, entityId])
+  @@map("tag_assignments")
+}
+
+model CustomField {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String   @db.ObjectId
+  entityType     String // "client", "lead", "project", "task"
+  name           String
+  fieldType      String // "text", "number", "date", "select", "multi_select", "boolean"
+  options        Json? // for select/multi_select types
+  isRequired     Boolean  @default(false)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  values       CustomFieldValue[]
+
+  @@unique([organizationId, entityType, name])
+  @@index([organizationId])
+  @@map("custom_fields")
+}
+
+model CustomFieldValue {
+  id            String @id @default(auto()) @map("_id") @db.ObjectId
+  customFieldId String @db.ObjectId
+  entityId      String
+  value         String
+
+  customField CustomField @relation(fields: [customFieldId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([customFieldId, entityId])
+  @@index([entityId])
+  @@map("custom_field_values")
+}

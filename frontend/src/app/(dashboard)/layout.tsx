@@ -1,0 +1,50 @@
+"use client"
+
+import React from "react"
+import { useAuth } from "@/context/AuthContext"
+import Sidebar from "@/components/dashboard/Sidebar"
+import Header from "@/components/dashboard/Header"
+import AiAssistantBubble from "@/components/dashboard/AiAssistantBubble"
+import { useRouter } from "next/navigation"
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const { user, loading } = useAuth()
+  const router = useRouter()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950">
+        <div className="space-y-4 text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-500 mx-auto"></div>
+          <p className="text-slate-400 text-sm">Restoring secure user session...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return null // Will redirect in AuthContext useEffect
+  }
+
+  return (
+    <div className="min-h-screen bg-background text-foreground transition-all font-sans">
+      {/* Navigation Panels */}
+      <Sidebar />
+      <Header />
+
+      {/* Main Content Workspace */}
+      <main className="pl-64 pt-16 min-h-screen transition-all">
+        <div className="p-8 max-w-7xl mx-auto w-full">
+          {children}
+        </div>
+      </main>
+
+      {/* AI Assistant Floating Bubble */}
+      <AiAssistantBubble />
+    </div>
+  )
+}
