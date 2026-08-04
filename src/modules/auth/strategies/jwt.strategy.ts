@@ -32,7 +32,12 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         fromCookie,
       ]),
       ignoreExpiration: false,
-      secretOrKey: configService.get('jwt.secret'),
+      // getOrThrow, not get: JWT_SECRET is a required env var (validated at
+      // startup by the Zod schema in configuration.ts), so the only way this
+      // could resolve to undefined is a config bug — better to fail loudly
+      // than let TypeScript widen it to `string | undefined` and paper over
+      // that with a cast.
+      secretOrKey: configService.getOrThrow<string>('jwt.secret'),
     });
   }
 

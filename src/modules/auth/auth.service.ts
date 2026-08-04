@@ -777,14 +777,21 @@ export class AuthService {
     email: string,
     isSuperAdmin: boolean,
   ): Promise<{ accessToken: string; refreshToken: string }> {
-    const payload: JwtPayload = { sub: userId, email, isSuperAdmin };
+    // Distinct jti per token: JWT signing is deterministic and iat only has
+    // second precision, so two calls for the same user within the same
+    // second would otherwise produce byte-identical tokens — the refresh one
+    // then collides with RefreshToken.token's unique constraint on the
+    // second insert (a real failure this exposed: login right after
+    // register, both within the same second, 500'd on exactly this).
+    const payload: JwtPayload = { sub: userId, email, isSuperAdmin, jti: uuidv4() };
+    const refreshPayload: JwtPayload = { sub: userId, email, isSuperAdmin, jti: uuidv4() };
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
         secret: this.configService.get('jwt.secret'),
         expiresIn: this.configService.get('jwt.expiresIn'),
       }),
-      this.jwtService.signAsync(payload, {
+      this.jwtService.signAsync(refreshPayload, {
         secret: this.configService.get('jwt.refreshSecret'),
         expiresIn: this.configService.get('jwt.refreshExpiresIn'),
       }),
