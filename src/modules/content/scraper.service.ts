@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { lookup } from 'dns/promises';
 import { isIP } from 'net';
+import { request as httpRequest, IncomingMessage } from 'http';
+import { request as httpsRequest } from 'https';
 
 export interface ScrapedPage {
   url: string;
@@ -38,6 +40,14 @@ export interface ScrapeOutcome {
  * Every URL is therefore validated *after DNS resolution* and again on every
  * redirect hop, because a public hostname can resolve to (or redirect to)
  * 127.0.0.1, a private range, or a cloud metadata endpoint.
+ *
+ * That check-then-connect sequence has its own gap if the two steps re-resolve
+ * DNS independently: a validated hostname could rebind to a private address in
+ * the moment between the check and the request. `assertSafeUrl` returns the
+ * exact address it validated, and the request is made with a custom `lookup`
+ * that pins the connection to that address — the hostname is still sent for
+ * the Host header, SNI and TLS certificate validation, but no second DNS
+ * query ever happens, so there is nothing left to race.
  */
 @Injectable()
 export class ScraperService {
@@ -102,50 +112,51 @@ export class ScraperService {
     let url = startUrl;
 
     for (let hop = 0; hop <= this.maxRedirects; hop++) {
-      await this.assertSafeUrl(url);
+      const pinnedAddress = await this.assertSafeUrl(url);
 
       if (this.respectRobots && !(await this.robotsAllows(url))) {
         throw new Error('disallowed by robots.txt');
       }
 
+      const parsedUrl = new URL(url);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-      let response: Response;
+      let response: { status: number; headers: Map<string, string>; body: IncomingMessage };
       try {
-        response = await fetch(url, {
-          // Manual redirects so every hop is re-validated against the SSRF
-          // guard; `redirect: 'follow'` would let a public URL bounce us to
-          // an internal address without another check.
-          redirect: 'manual',
-          signal: controller.signal,
-          headers: {
-            'User-Agent': this.userAgent,
-            Accept: 'text/html,application/xhtml+xml',
-            'Accept-Language': 'en',
-          },
-        });
+        // Manual redirects so every hop is re-validated (and re-pinned) against
+        // the SSRF guard; auto-following would let a public URL bounce us to an
+        // internal address without another check.
+        response = await this.pinnedRequest(parsedUrl, pinnedAddress, controller.signal);
       } finally {
         clearTimeout(timer);
       }
 
       if (response.status >= 300 && response.status < 400) {
+        response.body.destroy();
         const location = response.headers.get('location');
         if (!location) throw new Error(`redirect ${response.status} without location`);
         url = new URL(location, url).toString();
         continue;
       }
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (response.status < 200 || response.status >= 300) {
+        response.body.destroy();
+        throw new Error(`HTTP ${response.status}`);
+      }
 
       const contentType = response.headers.get('content-type') || '';
       if (!/text\/html|application\/xhtml|text\/plain/i.test(contentType)) {
+        response.body.destroy();
         throw new Error(`unsupported content-type: ${contentType.split(';')[0] || 'unknown'}`);
       }
 
       const declared = Number(response.headers.get('content-length') || 0);
-      if (declared && declared > this.maxBytes) throw new Error(`too large (${declared} bytes)`);
+      if (declared && declared > this.maxBytes) {
+        response.body.destroy();
+        throw new Error(`too large (${declared} bytes)`);
+      }
 
-      const html = await this.readCapped(response);
+      const html = await this.readCapped(response.body);
       const text = this.extractText(html);
       if (text.length < 200) return null;
 
@@ -162,34 +173,81 @@ export class ScraperService {
     throw new Error('too many redirects');
   }
 
-  /** Reads the body but stops once the cap is exceeded, so a lying or absent content-length can't exhaust memory. */
-  private async readCapped(response: Response): Promise<string> {
-    const reader = response.body?.getReader();
-    if (!reader) return response.text();
+  /**
+   * Issues the request with the TCP connection pinned to `pinnedAddress` via a
+   * custom `lookup`, so no DNS query happens at connect time — the address
+   * that was security-checked is the address that gets connected to, full
+   * stop. `hostname` is still passed through for the Host header, SNI and TLS
+   * certificate verification, so this changes nothing about correctness.
+   */
+  private pinnedRequest(
+    parsedUrl: URL,
+    pinnedAddress: string,
+    signal: AbortSignal,
+  ): Promise<{ status: number; headers: Map<string, string>; body: IncomingMessage }> {
+    return new Promise((resolve, reject) => {
+      const isHttps = parsedUrl.protocol === 'https:';
+      const requestFn = isHttps ? httpsRequest : httpRequest;
+      const pinnedFamily = isIP(pinnedAddress);
 
-    const chunks: Uint8Array[] = [];
+      const req = requestFn(
+        {
+          hostname: parsedUrl.hostname,
+          port: parsedUrl.port || (isHttps ? 443 : 80),
+          path: `${parsedUrl.pathname}${parsedUrl.search}`,
+          method: 'GET',
+          timeout: this.timeoutMs,
+          lookup: (_hostname: string, options: any, callback: any) => {
+            if (options?.all) callback(null, [{ address: pinnedAddress, family: pinnedFamily }]);
+            else callback(null, pinnedAddress, pinnedFamily);
+          },
+          headers: {
+            'User-Agent': this.userAgent,
+            Accept: 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en',
+          },
+        } as any,
+        (res: IncomingMessage) => {
+          const headers = new Map<string, string>();
+          for (const [key, value] of Object.entries(res.headers)) {
+            if (typeof value === 'string') headers.set(key, value);
+            else if (Array.isArray(value)) headers.set(key, value.join(', '));
+          }
+          resolve({ status: res.statusCode || 0, headers, body: res });
+        },
+      );
+
+      req.on('timeout', () => req.destroy(new Error('request timed out')));
+      req.on('error', reject);
+      signal.addEventListener('abort', () => req.destroy(new Error('request timed out')), { once: true });
+      req.end();
+    });
+  }
+
+  /** Reads the body but stops once the cap is exceeded, so a lying or absent content-length can't exhaust memory. */
+  private async readCapped(body: IncomingMessage): Promise<string> {
+    const chunks: Buffer[] = [];
     let total = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
+    for await (const chunk of body as AsyncIterable<Buffer>) {
+      total += chunk.length;
       if (total > this.maxBytes) {
-        await reader.cancel().catch(() => undefined);
+        body.destroy();
         break;
       }
-      chunks.push(value);
+      chunks.push(chunk);
     }
-    return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
+    return Buffer.concat(chunks).toString('utf8');
   }
 
   // ---------- SSRF guard ----------
 
   /**
-   * Throws unless `raw` is a public http(s) URL.
+   * Throws unless `raw` is a public http(s) URL. Returns the exact address it
+   * validated, so the caller can pin the actual connection to it rather than
+   * letting a second, independent DNS lookup decide where the request goes.
    * Exposed for testing - this is the security boundary and is unit tested.
    */
-  async assertSafeUrl(raw: string): Promise<void> {
+  async assertSafeUrl(raw: string): Promise<string> {
     let parsed: URL;
     try {
       parsed = new URL(raw);
@@ -216,6 +274,8 @@ export class ScraperService {
         throw new Error(`blocked non-public address (${address})`);
       }
     }
+
+    return addresses[0];
   }
 
   /** Loopback, private, link-local (incl. cloud metadata), CGNAT, and reserved ranges. */

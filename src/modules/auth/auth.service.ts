@@ -102,7 +102,7 @@ export class AuthService {
   // LOGIN
   // ============================================================
 
-  async login(dto: LoginDto): Promise<AuthResponseDto & { requires2FA?: boolean }> {
+  async login(dto: LoginDto): Promise<AuthResponseDto & { requires2FA?: boolean; tempToken?: string }> {
     const email = dto.email.toLowerCase();
 
     // Checked before touching the DB so a locked account costs an attacker a
@@ -144,6 +144,10 @@ export class AuthService {
         accessToken: '',
         refreshToken: '',
         requires2FA: true,
+        // Was computed above and stored in Redis but never actually placed on
+        // the response, so the 2FA flow had no way to complete — the frontend
+        // called verify2FA with an undefined tempToken.
+        tempToken,
         user: {
           id: user.id,
           email: user.email,

@@ -189,13 +189,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // (once on mount, again when currentOrg's reference changed). Session
   // restoration only needs to happen when the app boots; everything after
   // that is driven by explicit login/logout/refresh calls.
+  //
+  // There's no token in localStorage to check anymore — the session lives in
+  // an httpOnly cookie this code can't read — so restoration always just
+  // asks the server. A signed-out visitor gets a 401 here, which refreshUser
+  // already treats as ordinary (not an error to log).
   useEffect(() => {
-    const token = localStorage.getItem("token")
-    if (token) {
-      refreshUser()
-    } else {
-      setLoading(false)
-    }
+    refreshUser()
   }, [refreshUser])
 
   // Route guard. Pure client-side — no network calls — so navigating between
@@ -211,15 +211,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (email: string, password: string) => {
       try {
         const response: any = await api.post("/api/auth/login", { email, password })
-        // API returns { success, data: { accessToken, refreshToken, user }, timestamp }
+        // API returns { success, data: { requires2FA?, tempToken?, user }, timestamp } —
+        // the access/refresh tokens travel as Set-Cookie headers, not in this body.
         const loginData = response.data || response
 
         if (loginData.requires2FA) {
           return { requires2FA: true, tempToken: loginData.tempToken }
         }
 
-        localStorage.setItem("token", loginData.accessToken)
-        localStorage.setItem("refreshToken", loginData.refreshToken)
+        // Tokens arrived as httpOnly cookies, not in this response body —
+        // nothing to store. refreshUser() picks up the new session via the
+        // cookie the browser now holds.
         await refreshUser()
         router.push("/dashboard")
         return {}
@@ -234,10 +236,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(
     async (data: any) => {
       try {
-        const response: any = await api.post("/api/auth/register", data)
-        const regData = response.data || response
-        localStorage.setItem("token", regData.accessToken)
-        localStorage.setItem("refreshToken", regData.refreshToken)
+        await api.post("/api/auth/register", data)
         await refreshUser()
         router.push("/dashboard")
       } catch (error: any) {
@@ -250,10 +249,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const verify2FA = useCallback(
     async (tempToken: string, code: string) => {
       try {
-        const response: any = await api.post("/api/auth/2fa/verify", { tempToken, code })
-        const data = response.data || response
-        localStorage.setItem("token", data.accessToken)
-        localStorage.setItem("refreshToken", data.refreshToken)
+        await api.post("/api/auth/2fa/verify", { tempToken, code })
         await refreshUser()
         router.push("/dashboard")
       } catch (error: any) {
@@ -274,10 +270,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const verifyMagicLink = useCallback(
     async (token: string) => {
       try {
-        const response: any = await api.post("/api/auth/magic-link/verify", { token })
-        const data = response.data || response
-        localStorage.setItem("token", data.accessToken)
-        localStorage.setItem("refreshToken", data.refreshToken)
+        await api.post("/api/auth/magic-link/verify", { token })
         await refreshUser()
         router.push("/dashboard")
       } catch (error: any) {
@@ -289,13 +282,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      const rt = localStorage.getItem("refreshToken")
-      await api.post("/api/auth/logout", { refreshToken: rt })
+      // The refresh token travels as a cookie now; the server reads it
+      // directly and clears all three auth cookies in the response.
+      await api.post("/api/auth/logout", {})
     } catch (e) {
       // Ignore network error on logout
     } finally {
-      localStorage.removeItem("token")
-      localStorage.removeItem("refreshToken")
       localStorage.removeItem("organizationId")
       setUser(null)
       setOrganizations([])

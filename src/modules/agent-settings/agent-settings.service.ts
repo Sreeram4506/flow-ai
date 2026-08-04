@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PublishChannel } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 
@@ -30,7 +30,19 @@ export class AgentSettingsService {
     emailAllowlist: string[];
     dailyPlanHour: number;
   }>) {
-    await this.get(orgId); // ensure exists
+    const current = await this.get(orgId); // ensure exists
+    const nextAutoSend = data.autoSendEmail ?? current.autoSendEmail;
+    const nextAllowlist = data.emailAllowlist ?? current.emailAllowlist;
+    // An empty allowlist means "any recipient". Combined with autoSendEmail
+    // that turns a single successful prompt injection (a scraped page or
+    // inbound email steering draft_email's `to` argument) into mail sent to
+    // an address the attacker chose, with no human in the loop. Require an
+    // explicit allowlist before auto-send can be turned on.
+    if (nextAutoSend && nextAllowlist.length === 0) {
+      throw new BadRequestException(
+        'autoSendEmail requires a non-empty emailAllowlist. An empty allowlist means "any recipient", which would let auto-send mail go to an address chosen by injected content.',
+      );
+    }
     return this.prisma.agentSettings.update({ where: { organizationId: orgId }, data });
   }
 

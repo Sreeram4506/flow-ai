@@ -55,10 +55,13 @@ export class LoginDto {
 }
 
 export class RefreshTokenDto {
-  @ApiProperty()
+  // Optional: the browser client sends none at all (the refresh token lives in
+  // an httpOnly cookie the server reads directly); a non-browser API client
+  // without cookie support can still pass one here.
+  @ApiProperty({ required: false })
   @IsString()
-  @IsNotEmpty()
-  refreshToken: string;
+  @IsOptional()
+  refreshToken?: string;
 }
 
 export class ForgotPasswordDto {

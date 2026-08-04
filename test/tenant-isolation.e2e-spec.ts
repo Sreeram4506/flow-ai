@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import * as cookieParser from 'cookie-parser';
 import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 
@@ -14,7 +15,11 @@ import { AppModule } from '../src/app.module';
  *
  * Shape of the fixture: two users, each owning their own organization, with
  * one project apiece. Every assertion is some form of "user B, holding a
- * valid token, must not be able to touch org A's data".
+ * valid session, must not be able to touch org A's data".
+ *
+ * Session tokens are httpOnly cookies now, not values this file can read —
+ * each user gets its own `request.agent(...)`, which keeps its own cookie
+ * jar across calls, the same way two separate browsers would.
  */
 describe('Tenant isolation (e2e)', () => {
   let app: INestApplication;
@@ -33,14 +38,24 @@ describe('Tenant isolation (e2e)', () => {
     lastName: 'UserB',
   };
 
-  let tokenA: string;
-  let tokenB: string;
+  let agentA: ReturnType<typeof request.agent>;
+  let agentB: ReturnType<typeof request.agent>;
+  let csrfA: string;
+  let csrfB: string;
   let orgA: string;
   let orgB: string;
   let projectA: string;
 
-  const authed = (token: string, org?: string) => {
-    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  function extractCsrfToken(res: request.Response): string {
+    const raw = (res.headers['set-cookie'] as unknown as string[] | undefined) ?? [];
+    const cookie = raw.find((c) => c.startsWith('csrf_token='));
+    if (!cookie) throw new Error('csrf_token cookie was not set on this response');
+    return decodeURIComponent(cookie.split(';')[0].split('=')[1]);
+  }
+
+  /** x-organization-id plus the CSRF header a mutating request needs. */
+  const scoped = (csrfToken: string, org?: string) => {
+    const headers: Record<string, string> = { 'x-csrf-token': csrfToken };
     if (org) headers['x-organization-id'] = org;
     return headers;
   };
@@ -51,34 +66,40 @@ describe('Tenant isolation (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    // See app.e2e-spec.ts: this harness builds its own INestApplication
+    // rather than calling main.ts's bootstrap(), so cookie-parser has to be
+    // registered here too or req.cookies is undefined for every request.
+    app.use(cookieParser());
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
     await app.init();
 
     const server = app.getHttpServer();
+    agentA = request.agent(server);
+    agentB = request.agent(server);
 
-    const regA = await request(server).post('/api/auth/register').send(userA).expect(201);
-    tokenA = regA.body.accessToken ?? regA.body.data?.accessToken;
+    const regA = await agentA.post('/api/auth/register').send(userA).expect(201);
+    csrfA = extractCsrfToken(regA);
 
-    const regB = await request(server).post('/api/auth/register').send(userB).expect(201);
-    tokenB = regB.body.accessToken ?? regB.body.data?.accessToken;
+    const regB = await agentB.post('/api/auth/register').send(userB).expect(201);
+    csrfB = extractCsrfToken(regB);
 
-    const createdOrgA = await request(server)
+    const createdOrgA = await agentA
       .post('/api/organizations')
-      .set(authed(tokenA))
+      .set(scoped(csrfA))
       .send({ name: `Org A ${unique}` })
       .expect(201);
     orgA = createdOrgA.body.data.id;
 
-    const createdOrgB = await request(server)
+    const createdOrgB = await agentB
       .post('/api/organizations')
-      .set(authed(tokenB))
+      .set(scoped(csrfB))
       .send({ name: `Org B ${unique}` })
       .expect(201);
     orgB = createdOrgB.body.data.id;
 
-    const createdProject = await request(server)
+    const createdProject = await agentA
       .post('/api/projects')
-      .set(authed(tokenA, orgA))
+      .set(scoped(csrfA, orgA))
       .send({ name: 'Org A Confidential Project' })
       .expect(201);
     projectA = createdProject.body.data.id;
@@ -89,25 +110,16 @@ describe('Tenant isolation (e2e)', () => {
   });
 
   it('rejects an org-scoped request with no organization header', async () => {
-    await request(app.getHttpServer())
-      .get('/api/projects')
-      .set(authed(tokenA))
-      .expect(403);
+    await agentA.get('/api/projects').expect(403);
   });
 
   it("rejects a user presenting another organization's id", async () => {
     // User B is authenticated, but is not a member of org A.
-    await request(app.getHttpServer())
-      .get('/api/projects')
-      .set(authed(tokenB, orgA))
-      .expect(403);
+    await agentB.get('/api/projects').set('x-organization-id', orgA).expect(403);
   });
 
   it("does not leak org A's projects into org B's listing", async () => {
-    const res = await request(app.getHttpServer())
-      .get('/api/projects')
-      .set(authed(tokenB, orgB))
-      .expect(200);
+    const res = await agentB.get('/api/projects').set('x-organization-id', orgB).expect(200);
 
     const ids = (res.body.data ?? []).map((p: any) => p.id);
     expect(ids).not.toContain(projectA);
@@ -115,42 +127,30 @@ describe('Tenant isolation (e2e)', () => {
 
   it("blocks reading another org's project by direct id", async () => {
     // Even with a correct, existing project id, the tenant scope must win.
-    await request(app.getHttpServer())
-      .get(`/api/projects/${projectA}`)
-      .set(authed(tokenB, orgA))
-      .expect(403);
+    await agentB.get(`/api/projects/${projectA}`).set('x-organization-id', orgA).expect(403);
   });
 
   it("blocks reading another org's project while scoped to one's own org", async () => {
     // The guard passes here (B really is a member of org B), so this asserts
     // the *service* also scopes its query by organizationId — a 200 would mean
     // the query ignored the tenant and leaked the record.
-    await request(app.getHttpServer())
-      .get(`/api/projects/${projectA}`)
-      .set(authed(tokenB, orgB))
-      .expect(404);
+    await agentB.get(`/api/projects/${projectA}`).set('x-organization-id', orgB).expect(404);
   });
 
   it("blocks mutating another org's project", async () => {
-    await request(app.getHttpServer())
+    await agentB
       .patch(`/api/projects/${projectA}`)
-      .set(authed(tokenB, orgB))
+      .set(scoped(csrfB, orgB))
       .send({ name: 'Hijacked' })
       .expect(404);
   });
 
   it("blocks deleting another org's project", async () => {
-    await request(app.getHttpServer())
-      .delete(`/api/projects/${projectA}`)
-      .set(authed(tokenB, orgB))
-      .expect(404);
+    await agentB.delete(`/api/projects/${projectA}`).set(scoped(csrfB, orgB)).expect(404);
   });
 
   it('still allows the rightful owner through', async () => {
-    const res = await request(app.getHttpServer())
-      .get(`/api/projects/${projectA}`)
-      .set(authed(tokenA, orgA))
-      .expect(200);
+    const res = await agentA.get(`/api/projects/${projectA}`).set('x-organization-id', orgA).expect(200);
 
     expect(res.body.data.id).toBe(projectA);
   });
@@ -165,7 +165,7 @@ describe('Tenant isolation (e2e)', () => {
   it('rejects a forged bearer token', async () => {
     await request(app.getHttpServer())
       .get('/api/projects')
-      .set(authed('not-a-real-jwt', orgA))
+      .set({ Authorization: 'Bearer not-a-real-jwt', 'x-organization-id': orgA })
       .expect(401);
   });
 });

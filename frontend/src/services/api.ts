@@ -9,15 +9,23 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"
 const isAuthRequest = (url?: string) => !!url && url.includes("/api/auth/")
 
 /**
- * Drops the stored session and sends the user to login.
- *
- * Skips the redirect when already on an auth screen, so a 401 raised by the
- * login page itself can't bounce the browser in a loop.
+ * Session tokens live in httpOnly cookies the server sets on login — never in
+ * localStorage or any other place page JavaScript can read. That's the whole
+ * point: an XSS on this page (rich text, uploaded file names, AI-generated
+ * summaries — this dashboard has real XSS surface) can run arbitrary JS, but
+ * an httpOnly cookie is invisible to it regardless. `organizationId` is just
+ * a UI preference (which org is active), not a credential, so it stays in
+ * localStorage.
  */
+const readCookie = (name: string): string | null => {
+  if (typeof document === "undefined") return null
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+/** Drops the session and sends the user to login. Server clears the auth cookies; this clears local UI state and redirects. */
 export const clearSession = () => {
   if (typeof window === "undefined") return
-  localStorage.removeItem("token")
-  localStorage.removeItem("refreshToken")
   localStorage.removeItem("organizationId")
   const onAuthScreen = /^\/(login|register|magic-link|forgot-password|reset-password)/.test(
     window.location.pathname,
@@ -25,39 +33,39 @@ export const clearSession = () => {
   if (!onAuthScreen) window.location.href = "/login"
 }
 
-/**
- * A token is only usable if it's a non-empty string. The literal "undefined"
- * is checked because a previously broken refresh path stored that value, and
- * anyone carrying it would otherwise keep sending `Bearer undefined` forever.
- */
-const readToken = (key: string): string | null => {
-  const value = localStorage.getItem(key)
-  if (!value || value === "undefined" || value === "null") {
-    if (value) localStorage.removeItem(key)
-    return null
-  }
-  return value
-}
-
 export const api = axios.create({
   baseURL: API_URL,
+  // Sends the httpOnly auth cookies on every request, including cross-origin
+  // ones (frontend and backend run on different ports/origins in dev and
+  // typically in production too). The server's CORS config allows this only
+  // for the specific origins in CORS_ORIGINS, never '*', which credentialed
+  // CORS requires.
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
   },
 })
 
-// Request Interceptor: Inject JWT and active Organization ID
+// Request Interceptor: active Organization ID + CSRF double-submit header.
+// The JWT itself travels as a cookie now and is attached by the browser
+// automatically — nothing to inject here.
 api.interceptors.request.use(
   (config) => {
     if (typeof window !== "undefined") {
-      const token = readToken("token")
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`
-      }
-
       const orgId = localStorage.getItem("organizationId")
       if (orgId) {
         config.headers["x-organization-id"] = orgId
+      }
+
+      // Double-submit CSRF defense: the server pairs a non-httpOnly csrf_token
+      // cookie with the httpOnly auth cookies. Echoing its value back as a
+      // header proves this request came from JS running on our own origin —
+      // a cross-site attacker's page can trigger the request (cookies attach
+      // automatically) but can't read the cookie to also set the header.
+      const method = config.method?.toLowerCase()
+      if (method && ["post", "put", "patch", "delete"].includes(method)) {
+        const csrfToken = readCookie("csrf_token")
+        if (csrfToken) config.headers["x-csrf-token"] = csrfToken
       }
     }
 
@@ -92,37 +100,20 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    if (error.response?.status === 401 && !originalRequest?._retry) {
+    if (error.response?.status === 401 && !originalRequest?._retry && !isAuthRequest(originalRequest?.url)) {
       originalRequest._retry = true;
-      const refreshToken =
-        typeof window !== "undefined" ? readToken("refreshToken") : null
 
-      if (refreshToken) {
-        try {
-          const res = await axios.post(`${API_URL}/api/auth/refresh`, { refreshToken })
-          // The API wraps every response as { success, data, timestamp }. This
-          // is a bare axios call, so it does NOT pass through the unwrapping
-          // interceptor above — reading res.data.accessToken directly yielded
-          // undefined, which was then written to localStorage, so every
-          // subsequent request sent "Bearer undefined" and 401'd in a loop.
-          const payload = res.data?.data ?? res.data
-          const accessToken = payload?.accessToken
-          const newRefreshToken = payload?.refreshToken
-
-          if (accessToken) {
-            localStorage.setItem("token", accessToken)
-            if (newRefreshToken) localStorage.setItem("refreshToken", newRefreshToken)
-            originalRequest.headers.Authorization = `Bearer ${accessToken}`
-            return api(originalRequest)
-          }
-          clearSession()
-        } catch {
-          clearSession()
-        }
-      } else {
-        // No refresh token at all. Previously this fell through without
-        // clearing or redirecting, leaving the app rendering an authenticated
-        // shell it could never populate.
+      // The refresh token lives in an httpOnly cookie now, so there's nothing
+      // for JS to check before trying — the browser attaches it automatically
+      // if one exists. A 401 here (no cookie, or an expired/revoked one)
+      // means the session genuinely can't be refreshed.
+      try {
+        await axios.post(`${API_URL}/api/auth/refresh`, {}, { withCredentials: true })
+        // New cookies are already set by the response; the server no longer
+        // returns tokens in the body, so there's nothing to store — just
+        // retry with the cookie jar the browser now holds.
+        return api(originalRequest)
+      } catch {
         clearSession()
       }
     }

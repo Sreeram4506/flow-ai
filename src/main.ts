@@ -51,7 +51,7 @@ async function bootstrap() {
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-organization-id'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-organization-id', 'x-csrf-token'],
   });
 
   // ---- Validation ----
@@ -69,7 +69,13 @@ async function bootstrap() {
     .setTitle('Flow API')
     .setDescription(
       'Flow – Enterprise SaaS Project Management Platform API\n\n' +
-      '**Authentication**: Include `Authorization: Bearer <token>` header.\n' +
+      '**Authentication**: The browser frontend authenticates via an httpOnly `access_token` ' +
+      'cookie set by `/api/auth/login` — there is nothing for JS to read or store. Non-browser ' +
+      'clients (this Swagger UI included) can instead include an `Authorization: Bearer <token>` ' +
+      'header, but note login no longer returns a token in the JSON body; obtain one via a direct ' +
+      'API call outside the browser flow.\n' +
+      '**CSRF**: Cookie-authenticated mutating requests must echo the `csrf_token` cookie value ' +
+      'back as an `x-csrf-token` header.\n' +
       '**Multi-Tenancy**: Include `x-organization-id` header for org-scoped endpoints.',
     )
     .setVersion('1.0.0')

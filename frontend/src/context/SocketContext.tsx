@@ -53,12 +53,18 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     const newSocket = io(`${socketUrl}/ws`, {
       transports: ["websocket"],
       autoConnect: true,
+      // Sends the httpOnly access_token cookie with the handshake so the
+      // server can authenticate the connection itself, rather than trusting
+      // whatever userId this client claims in the 'join' payload.
+      withCredentials: true,
     })
 
     newSocket.on("connect", () => {
       setConnected(true)
-      // Join rooms for real-time notifications/updates
-      newSocket.emit("join", { userId, orgId })
+      // The server derives the authenticated user from the handshake cookie
+      // and verifies org membership before joining the org room — orgId is
+      // just which room to request, not an identity claim.
+      newSocket.emit("join", { orgId })
     })
 
     newSocket.on("disconnect", () => {

@@ -2,9 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import type { Request } from 'express';
 import { PrismaService } from '../../../database/prisma.service';
 import { JwtPayload, AuthenticatedUser } from '../../../common/types';
 import { TtlCache } from '../../../common/utils';
+
+/** Reads the access token from the httpOnly cookie the browser client uses. */
+const fromCookie = (req: Request): string | null => req?.cookies?.access_token || null;
 
 // 30s TTL: every authenticated request previously hit the DB for the user row.
 // A short cache removes that round-trip; deactivated users still lose access
@@ -18,7 +22,15 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     private readonly prisma: PrismaService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // The browser frontend authenticates via the httpOnly access_token
+      // cookie now (never JS-readable, so it survives an XSS that a
+      // localStorage-held token would not); the Bearer header is kept for
+      // non-browser API clients (scripts, Swagger "Authorize") that don't
+      // carry cookies.
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        fromCookie,
+      ]),
       ignoreExpiration: false,
       secretOrKey: configService.get('jwt.secret'),
     });

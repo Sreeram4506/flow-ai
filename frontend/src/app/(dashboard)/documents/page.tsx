@@ -395,7 +395,7 @@ export default function DocumentsPage() {
                   <span>Analyzing document contents...</span>
                 </div>
               ) : (
-                <div dangerouslySetInnerHTML={{ __html: summaryModal.text.replace(/\n/g, '<br/>') }} />
+                <div className="whitespace-pre-wrap">{summaryModal.text}</div>
               )}
             </div>
 

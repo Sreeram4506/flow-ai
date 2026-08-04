@@ -81,7 +81,10 @@ const envSchema = z.object({
   TEXT_MODEL: z.string().default('gemini-2.0-flash'),
 
   // AI Agent Platform
-  AGENT_ENCRYPTION_KEY: z.string().min(32).optional(), // 32+ chars, used for AES-256-GCM token encryption
+  // 32+ chars, used for AES-256-GCM encryption of stored social/email OAuth
+  // tokens. Required (no fallback) — a missing key must fail startup, not
+  // silently encrypt every tenant's tokens with a guessable default.
+  AGENT_ENCRYPTION_KEY: z.string().min(32),
   IMAGE_PROVIDER: z.enum(['gemini', 'openai', 'none']).default('gemini'),
   // Gemini-native image output. The older `imagen-3.0-*` models are retired for
   // API keys created after their cutoff, so they can't be the default any more

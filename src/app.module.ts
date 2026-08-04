@@ -17,6 +17,7 @@ import { GlobalExceptionFilter } from './common/filters';
 import { LoggingInterceptor, TransformInterceptor } from './common/interceptors';
 import { RolesGuard } from './common/guards';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { CsrfMiddleware } from './common/middleware/csrf.middleware';
 
 // Feature Modules
 import { UsersModule } from './modules/users/users.module';
@@ -132,5 +133,7 @@ export class AppModule implements NestModule {
     // Applied to every route so that the correlation ID exists before any
     // guard, interceptor or filter runs and can reference it.
     consumer.apply(RequestIdMiddleware).forRoutes('*');
+    // Double-submit CSRF check for cookie-authenticated mutating requests.
+    consumer.apply(CsrfMiddleware).forRoutes('*');
   }
 }

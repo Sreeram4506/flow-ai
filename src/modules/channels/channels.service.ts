@@ -32,11 +32,15 @@ export class ChannelsService {
   }
 
   private get encryptionKey(): string {
-    return (
-      this.configService.get<string>('agents.encryptionKey') ||
-      this.configService.get<string>('jwt.secret') ||
-      'flow-dev-fallback-encryption-key'
-    );
+    // AGENT_ENCRYPTION_KEY is required by env validation (configuration.ts),
+    // so this should always be set by the time the app boots. No fallback:
+    // a missing key must throw, not silently encrypt tokens with a value an
+    // attacker could derive or find in source control.
+    const key = this.configService.get<string>('agents.encryptionKey');
+    if (!key) {
+      throw new Error('AGENT_ENCRYPTION_KEY is not configured');
+    }
+    return key;
   }
 
   // ---- Account management ----

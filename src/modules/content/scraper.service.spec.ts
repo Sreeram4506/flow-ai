@@ -91,18 +91,21 @@ describe('ScraperService URL guard', () => {
   });
 
   describe('allows legitimate targets', () => {
-    it('allows a normal https page', async () => {
-      await expect(service.assertSafeUrl('https://example.com/article')).resolves.toBeUndefined();
+    it('allows a normal https page and returns the address it validated', async () => {
+      // The resolved address is returned so the caller can pin the actual
+      // connection to it instead of re-resolving DNS a second time (the fix
+      // for the rebinding TOCTOU covered above).
+      await expect(service.assertSafeUrl('https://example.com/article')).resolves.toBe('93.184.216.34');
     });
 
-    it('allows a public IPv4 literal', async () => {
+    it('allows a public IPv4 literal and returns it unchanged', async () => {
       resolvesTo('8.8.8.8');
-      await expect(service.assertSafeUrl('http://8.8.8.8/')).resolves.toBeUndefined();
+      await expect(service.assertSafeUrl('http://8.8.8.8/')).resolves.toBe('8.8.8.8');
     });
 
-    it('allows a public IPv6 literal', async () => {
+    it('allows a public IPv6 literal and returns it unchanged', async () => {
       resolvesTo('2606:4700:4700::1111');
-      await expect(service.assertSafeUrl('https://[2606:4700:4700::1111]/')).resolves.toBeUndefined();
+      await expect(service.assertSafeUrl('https://[2606:4700:4700::1111]/')).resolves.toBe('2606:4700:4700::1111');
     });
   });
 

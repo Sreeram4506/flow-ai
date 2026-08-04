@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ContentStatus, ContentType, PublishChannel } from '@prisma/client';
 import { AI_PROVIDER, AiProvider } from './providers/ai-provider.interface';
@@ -67,6 +67,26 @@ export class ContentService {
     agentId?: string,
     onStage: StageReporter = () => undefined,
   ) {
+    // These same rails already gate the tool-calling agent loop
+    // (agent-executor.service.ts); this is the other entry point into the
+    // billed research/image/video pipeline (direct POST /api/content/generate
+    // and its queued job), and it was bypassing both the kill-switch and the
+    // daily token budget entirely. Checked up front so an org that flips the
+    // kill-switch — or has already exhausted its budget — is stopped before
+    // any paid API call runs, not after.
+    if (await this.settingsService.isHalted(orgId)) {
+      throw new ForbiddenException('Kill-switch is active for this organization — content generation is paused');
+    }
+    // Rough upfront estimate of this pipeline's cost (research + media prompt
+    // + vision + copy calls; more for video). Approximate by design — the
+    // point is to stop a run before it starts once the daily budget is spent,
+    // not to meter exact token usage.
+    const estTokens = dto.withVideo ? 6000 : 4000;
+    const budget = await this.settingsService.consumeTokenBudget(orgId, estTokens);
+    if (!budget.allowed) {
+      throw new ForbiddenException('Daily AI token budget exhausted for this organization');
+    }
+
     const brandContext = await this.brandService.buildBrandContext(orgId);
     const isBlog = dto.channel === PublishChannel.WEBSITE;
     const wantsVideo = dto.withVideo === true;

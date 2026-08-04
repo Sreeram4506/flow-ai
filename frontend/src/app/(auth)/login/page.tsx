@@ -1,16 +1,39 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { Suspense, useEffect, useState } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { useAuth } from "@/context/AuthContext"
 import { LogIn, Key, Mail, ShieldAlert, Sparkles } from "lucide-react"
 
 export default function LoginPage() {
+  // useSearchParams() opts the subtree into client-side rendering, which
+  // Next.js requires wrapping in Suspense during static prerendering — a
+  // bare page export using it fails the build otherwise.
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  )
+}
+
+function LoginForm() {
   const { login, verify2FA } = useAuth()
+  const searchParams = useSearchParams()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+
+  // The OAuth callback redirects here with ?error=oauth_failed when the
+  // provider didn't return a usable identity (unconfigured credentials, no
+  // public email, user cancelled) — there's no in-page flow to catch that,
+  // only the redirect.
+  useEffect(() => {
+    if (searchParams.get("error") === "oauth_failed") {
+      setError("Sign-in with that provider didn't complete. Please try again or use your email and password.")
+    }
+  }, [searchParams])
   
   // 2FA state
   const [requires2FA, setRequires2FA] = useState(false)
@@ -138,28 +161,25 @@ export default function LoginPage() {
           <div className="flex-grow border-t border-slate-800"></div>
         </div>
 
-        {/* Google/GitHub OAuth: the backend routes exist (GET /api/auth/google,
-            /api/auth/github) but no Passport strategy is registered for either
-            provider yet, so hitting them today 500s. Disabled with a tooltip
-            instead of linking to a route that currently errors — see
-            USABILITY_NOTES.md for what's needed to finish this. */}
+        {/* Real, full-page navigations (not axios calls) — OAuth is a
+            server-driven redirect dance the backend now has Passport
+            strategies for. If the operator hasn't set GOOGLE_CLIENT_ID/
+            GITHUB_CLIENT_ID, the provider itself rejects the request rather
+            than this page erroring, matching how every other degraded
+            AI/integration feature in this app fails. */}
         <div className="grid grid-cols-2 gap-3 mb-6">
-          <button
-            type="button"
-            disabled
-            title="Coming soon — Google sign-in isn't wired up on the backend yet"
-            className="py-2 px-4 bg-slate-900/30 border border-slate-800/50 text-slate-600 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 cursor-not-allowed"
+          <a
+            href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}/api/auth/google`}
+            className="py-2 px-4 bg-slate-900/30 border border-slate-800/50 text-slate-300 hover:bg-slate-800/40 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
           >
             <span>Google</span>
-          </button>
-          <button
-            type="button"
-            disabled
-            title="Coming soon — GitHub sign-in isn't wired up on the backend yet"
-            className="py-2 px-4 bg-slate-900/30 border border-slate-800/50 text-slate-600 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 cursor-not-allowed"
+          </a>
+          <a
+            href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}/api/auth/github`}
+            className="py-2 px-4 bg-slate-900/30 border border-slate-800/50 text-slate-300 hover:bg-slate-800/40 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
           >
             <span>GitHub</span>
-          </button>
+          </a>
         </div>
 
         <div className="text-center text-xs text-slate-400 space-y-2">
