@@ -22,6 +22,7 @@ export class AiGenerateTasksDto {
 @Injectable()
 export class AiService {
   private readonly ai: any;
+  private readonly textModel: string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -31,13 +32,14 @@ export class AiService {
     if (apiKey) {
       this.ai = new GoogleGenAI({ apiKey });
     }
+    this.textModel = this.configService.get<string>('gemini.textModel') || 'gemini-2.0-flash';
   }
 
   private async generateText(prompt: string): Promise<string> {
     if (this.ai) {
       try {
         const response = await this.ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: this.textModel,
           contents: prompt,
         });
         return response.text || '';
@@ -135,7 +137,7 @@ export class AiService {
       return {
         conversationId,
         response: generated,
-        model: 'gemini-2.5-flash',
+        model: this.textModel,
         suggestedActions: conv.messages.length <= 2 ? suggestedActions : [],
         usage: { promptTokens: 0, completionTokens: 0 },
       };

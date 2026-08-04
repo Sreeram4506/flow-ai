@@ -1,25 +1,54 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as compression from 'compression';
 import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { join } from 'path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule, {
-    logger: ['error', 'warn', 'log', 'debug'],
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    // debug logging only outside production — it adds noticeable overhead per request
+    logger:
+      process.env.NODE_ENV === 'production'
+        ? ['error', 'warn', 'log']
+        : ['error', 'warn', 'log', 'debug'],
   });
 
   // ---- Security ----
-  app.use(helmet());
+  app.use(
+    helmet({
+      // The API serves user-uploaded files from /uploads. crossOriginResourcePolicy
+      // defaults to 'same-origin', which would block the frontend (a different
+      // origin in every deployment here) from rendering any of them.
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
   app.use(compression());
   app.use(cookieParser());
 
+  // ---- Static: user uploads ----
+  // Served by the app for local/single-node deployments. With the S3 driver
+  // these URLs point at the bucket/CDN instead and this route goes unused.
+  app.useStaticAssets(join(process.cwd(), 'uploads'), {
+    prefix: '/uploads/',
+    // Uploaded content must never be executed or sniffed into something
+    // executable by the browser, and should be downloaded rather than rendered
+    // inline where the type is ambiguous.
+    setHeaders: (res) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    },
+  });
+
   // ---- CORS ----
   app.enableCors({
-    origin: process.env.CORS_ORIGINS?.split(',').map((s) => s.trim()) || ['http://localhost:4000'],
+    origin: process.env.CORS_ORIGINS?.split(',').map((s) => s.trim()) || [
+      'http://localhost:3001',
+    ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-organization-id'],

@@ -1,9 +1,12 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
+import { BullModule } from '@nestjs/bull';
+import { ConfigService } from '@nestjs/config';
 import { ConfigModule } from './config';
 import { DatabaseModule } from './database';
+import { CommonModule } from './common/common.module';
 
 // Auth
 import { AuthModule } from './modules/auth/auth.module';
@@ -13,6 +16,7 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { GlobalExceptionFilter } from './common/filters';
 import { LoggingInterceptor, TransformInterceptor } from './common/interceptors';
 import { RolesGuard } from './common/guards';
+import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 // Feature Modules
 import { UsersModule } from './modules/users/users.module';
@@ -35,16 +39,39 @@ import { SearchModule } from './modules/search/search.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 
+// AI Agent Platform
+import { BrandModule } from './modules/brand/brand.module';
+import { ChannelsModule } from './modules/channels/channels.module';
+import { ContentModule } from './modules/content/content.module';
+import { AgentSettingsModule } from './modules/agent-settings/agent-settings.module';
+import { AgentsModule } from './modules/agents/agents.module';
+import { OrchestratorModule } from './modules/orchestrator/orchestrator.module';
+
 // Infrastructure
 import { GatewayModule } from './gateway/gateway.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
     // Core
     ConfigModule,
     DatabaseModule,
+    CommonModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     ScheduleModule.forRoot(),
+
+    // Job queues, backed by the Redis instance already used for caching,
+    // rate limiting and login lockout.
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        redis: {
+          host: config.get<string>('redis.host'),
+          port: config.get<number>('redis.port'),
+          password: config.get<string>('redis.password') || undefined,
+        },
+      }),
+    }),
 
     // Auth
     AuthModule,
@@ -70,8 +97,17 @@ import { GatewayModule } from './gateway/gateway.module';
     AiModule,
     AuditLogsModule,
 
+    // AI Agent Platform
+    BrandModule,
+    ChannelsModule,
+    ContentModule,
+    AgentSettingsModule,
+    AgentsModule,
+    OrchestratorModule,
+
     // Infrastructure
     GatewayModule,
+    HealthModule,
   ],
   providers: [
     // Global Exception Filter
@@ -91,4 +127,10 @@ import { GatewayModule } from './gateway/gateway.module';
     { provide: APP_INTERCEPTOR, useClass: TransformInterceptor },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    // Applied to every route so that the correlation ID exists before any
+    // guard, interceptor or filter runs and can reference it.
+    consumer.apply(RequestIdMiddleware).forRoutes('*');
+  }
+}

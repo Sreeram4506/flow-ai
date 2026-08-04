@@ -5,7 +5,7 @@ import { api } from "@/services/api"
 import { useAuth } from "@/context/AuthContext"
 import { FileCheck, Plus, FileSpreadsheet, Briefcase, Check, X, ArrowRight, Loader } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
-import { QuotationStatus } from "@prisma/client"
+import { QuotationStatus } from "@/lib/enums"
 
 export default function QuotationsPage() {
   const { currentOrg, user } = useAuth()

@@ -5,7 +5,7 @@ import { api } from "@/services/api"
 import { useAuth } from "@/context/AuthContext"
 import { TrendingDown, Plus, Check, X, FileText, DollarSign, Calendar, Tag } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
-import { ExpenseStatus, Currency } from "@prisma/client"
+import { ExpenseStatus, Currency } from "@/lib/enums"
 
 export default function ExpensesPage() {
   const { currentOrg, user } = useAuth()

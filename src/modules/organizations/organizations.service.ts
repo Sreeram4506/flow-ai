@@ -3,11 +3,18 @@ import { PrismaService } from '../../database/prisma.service';
 import { CreateOrganizationDto, UpdateOrganizationDto, InviteMemberDto, UpdateMemberRoleDto } from './dto/organization.dto';
 import { PaginationDto } from '../../common/dto';
 import { paginate, generateSlug, generateRandomString } from '../../common/utils';
+import { TenantMembershipCache } from '../../common/cache/tenant-membership.cache';
 import { UserRole } from '@prisma/client';
 
 @Injectable()
 export class OrganizationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // TenantGuard caches membership in Redis to avoid a DB round-trip per
+    // request. Every mutation below must bust that cache, otherwise a removed
+    // member or a downgraded role stays in force until the TTL lapses.
+    private readonly membershipCache: TenantMembershipCache,
+  ) {}
 
   async create(dto: CreateOrganizationDto, userId: string) {
     const slug = generateSlug(dto.name) + '-' + generateRandomString(6).toLowerCase();
@@ -84,6 +91,10 @@ export class OrganizationsService {
   async delete(id: string) {
     await this.findOne(id);
     await this.prisma.organization.delete({ where: { id } });
+
+    // Drop every cached membership for the org in one sweep.
+    await this.membershipCache.invalidateOrg(id);
+
     return { message: 'Organization deleted' };
   }
 
@@ -120,7 +131,7 @@ export class OrganizationsService {
       });
       if (existingMember) throw new ConflictException('User is already a member');
 
-      return this.prisma.organizationMember.create({
+      const created = await this.prisma.organizationMember.create({
         data: {
           organizationId: orgId,
           userId: existingUser.id,
@@ -129,6 +140,11 @@ export class OrganizationsService {
           joinedAt: new Date(),
         },
       });
+
+      // They may have been probed (and cached as a non-member) before now.
+      await this.membershipCache.invalidate(orgId, existingUser.id);
+
+      return created;
     }
 
     // Create invitation for non-existing user
@@ -160,10 +176,15 @@ export class OrganizationsService {
     if (!member) throw new NotFoundException('Member not found');
     if (member.role === UserRole.OWNER) throw new ForbiddenException('Cannot change owner role');
 
-    return this.prisma.organizationMember.update({
+    const updated = await this.prisma.organizationMember.update({
       where: { id: memberId },
       data: { role: dto.role },
     });
+
+    // A downgrade must take effect immediately, not after the cache TTL.
+    await this.membershipCache.invalidate(orgId, member.userId);
+
+    return updated;
   }
 
   async removeMember(orgId: string, memberId: string) {
@@ -174,17 +195,27 @@ export class OrganizationsService {
     if (member.role === UserRole.OWNER) throw new ForbiddenException('Cannot remove owner');
 
     await this.prisma.organizationMember.delete({ where: { id: memberId } });
+
+    // The security-critical one: without this, a removed user keeps full
+    // access on every instance whose cache still holds their membership.
+    await this.membershipCache.invalidate(orgId, member.userId);
+
     return { message: 'Member removed' };
   }
 
   async acceptInvite(token: string, userId: string) {
-    const invite = await this.prisma.organizationMember.findUnique({ where: { inviteToken: token } });
+    const invite = await this.prisma.organizationMember.findFirst({ where: { inviteToken: token } });
     if (!invite || invite.status !== 'INVITED') throw new NotFoundException('Invalid invite');
 
-    return this.prisma.organizationMember.update({
+    const accepted = await this.prisma.organizationMember.update({
       where: { id: invite.id },
       data: { userId, status: 'ACTIVE', joinedAt: new Date(), inviteToken: null },
     });
+
+    // Clear any cached "not a member" entry from before the invite was taken up.
+    await this.membershipCache.invalidate(invite.organizationId, userId);
+
+    return accepted;
   }
 
   // ---- API Keys ----

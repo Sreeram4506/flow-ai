@@ -2,6 +2,7 @@ import React from "react"
 import { ThemeProvider } from "../context/ThemeContext"
 import { AuthProvider } from "../context/AuthContext"
 import { SocketProvider } from "../context/SocketContext"
+import Toaster from "../components/Toaster"
 import "./globals.css"
 
 export const metadata = {
@@ -21,6 +22,7 @@ export default function RootLayout({
           <AuthProvider>
             <SocketProvider>
               {children}
+              <Toaster />
             </SocketProvider>
           </AuthProvider>
         </ThemeProvider>

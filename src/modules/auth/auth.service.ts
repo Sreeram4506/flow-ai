@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -23,6 +24,18 @@ import {
   AuthResponseDto,
 } from './dto';
 import { MailService } from './mail.service';
+
+/**
+ * Per-account lockout thresholds.
+ *
+ * The @Throttle limits on the controller are per-IP, so they don't stop a
+ * distributed attempt against one account (a botnet with 500 IPs gets 500x
+ * the budget). This counts failures per *account* instead, so one targeted
+ * user can't be ground down no matter how many sources the attacker has.
+ */
+const MAX_FAILED_LOGINS = 10;
+const LOCKOUT_SECONDS = 15 * 60;
+const FAILURE_WINDOW_SECONDS = 15 * 60;
 
 @Injectable()
 export class AuthService {
@@ -90,12 +103,21 @@ export class AuthService {
   // ============================================================
 
   async login(dto: LoginDto): Promise<AuthResponseDto & { requires2FA?: boolean }> {
+    const email = dto.email.toLowerCase();
+
+    // Checked before touching the DB so a locked account costs an attacker a
+    // Redis GET rather than a bcrypt comparison.
+    await this.assertNotLockedOut(email);
+
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase() },
+      where: { email },
       include: { twoFactorAuth: true },
     });
 
     if (!user || !user.passwordHash) {
+      // Counted even for non-existent accounts, otherwise the lockout itself
+      // becomes an account-enumeration oracle (locked = real user).
+      await this.recordFailedLogin(email);
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -105,8 +127,13 @@ export class AuthService {
 
     const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!isPasswordValid) {
+      await this.recordFailedLogin(email);
       throw new UnauthorizedException('Invalid credentials');
     }
+
+    // Successful password check — wipe the failure counter so a legitimate
+    // user who fumbled a few times doesn't stay one mistake from a lockout.
+    await this.clearFailedLogins(email);
 
     // Check if 2FA is enabled
     if (user.twoFactorAuth?.isEnabled) {
@@ -678,6 +705,68 @@ export class AuthService {
   // ============================================================
   // PRIVATE HELPERS
   // ============================================================
+
+  /**
+   * Throws if the account has exceeded MAX_FAILED_LOGINS within the window.
+   *
+   * Redis is deliberately fail-open here: if it's unreachable we let the
+   * login attempt through rather than locking every user out of the product
+   * because the cache is down. The per-IP @Throttle on the controller is the
+   * backstop in that scenario.
+   */
+  private async assertNotLockedOut(email: string): Promise<void> {
+    try {
+      const attempts = await this.redis.get(this.failedLoginKey(email));
+      if (attempts && Number(attempts) >= MAX_FAILED_LOGINS) {
+        const ttl = await this.redis.ttl(this.failedLoginKey(email));
+        const minutes = Math.max(1, Math.ceil((ttl > 0 ? ttl : LOCKOUT_SECONDS) / 60));
+        this.logger.warn(`Blocked login for locked-out account: ${email}`);
+        throw new ForbiddenException(
+          `Too many failed login attempts. Try again in ${minutes} minute(s).`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof ForbiddenException) throw err;
+      this.logger.error(
+        `Lockout check unavailable (failing open): ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  private async recordFailedLogin(email: string): Promise<void> {
+    try {
+      const key = this.failedLoginKey(email);
+      const count = await this.redis.incr(key);
+
+      // Only set expiry on the first failure so the window is a fixed period
+      // from that first attempt, not a rolling one an attacker can extend
+      // indefinitely by continuing to guess.
+      if (count === 1) {
+        await this.redis.expire(key, FAILURE_WINDOW_SECONDS);
+      }
+
+      if (count >= MAX_FAILED_LOGINS) {
+        await this.redis.expire(key, LOCKOUT_SECONDS);
+        this.logger.warn(`Account locked after ${count} failed logins: ${email}`);
+      }
+    } catch (err) {
+      this.logger.error(
+        `Could not record failed login: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  private async clearFailedLogins(email: string): Promise<void> {
+    try {
+      await this.redis.del(this.failedLoginKey(email));
+    } catch {
+      // Non-fatal: a stale counter expires on its own.
+    }
+  }
+
+  private failedLoginKey(email: string): string {
+    return `login-failures:${email}`;
+  }
 
   private async generateTokens(
     userId: string,

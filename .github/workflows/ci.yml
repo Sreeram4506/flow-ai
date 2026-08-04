@@ -11,20 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: flow
-          POSTGRES_PASSWORD: flow_secret_2024
-          POSTGRES_DB: flow_db_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
       redis:
         image: redis:7-alpine
         ports:
@@ -38,6 +24,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # MongoDB needs a replica set for Prisma transactions, so we start it
+    # manually instead of using a service container (which can't pass --replSet).
+    - name: Start MongoDB (replica set)
+      run: |
+        docker run -d --name flow-mongo -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+        sleep 5
+        docker exec flow-mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+        sleep 3
+
     - name: Use Node.js 20.x
       uses: actions/setup-node@v4
       with:
@@ -50,16 +45,20 @@ jobs:
     - name: Generate Prisma Client
       run: npx prisma generate
       env:
-        DATABASE_URL: postgresql://flow:flow_secret_2024@localhost:5432/flow_db_test?schema=public
+        DATABASE_URL: mongodb://localhost:27017/flow_db_test?replicaSet=rs0
 
-    - name: Run Prisma migrations
-      run: npx prisma migrate deploy
+    # MongoDB uses `prisma db push` (schema sync), not SQL migrations.
+    - name: Push Prisma schema to MongoDB
+      run: npx prisma db push --skip-generate
       env:
-        DATABASE_URL: postgresql://flow:flow_secret_2024@localhost:5432/flow_db_test?schema=public
+        DATABASE_URL: mongodb://localhost:27017/flow_db_test?replicaSet=rs0
 
+    # `continue-on-error: true` was set here, which meant lint failures were
+    # reported and then ignored — the job stayed green regardless. A check
+    # that can't fail isn't a check. `--max-warnings=0` also stops warnings
+    # accumulating silently until nobody reads the output any more.
     - name: Lint code
-      run: npm run lint
-      continue-on-error: true
+      run: npm run lint -- --max-warnings=0
 
     - name: Run unit tests
       run: npm run test
@@ -67,11 +66,24 @@ jobs:
     - name: Run end-to-end tests
       run: npm run test:e2e
       env:
-        DATABASE_URL: postgresql://flow:flow_secret_2024@localhost:5432/flow_db_test?schema=public
-        JWT_SECRET: your-super-secret-jwt-key-change-in-production
-        JWT_REFRESH_SECRET: your-super-secret-refresh-key-change-in-production
+        DATABASE_URL: mongodb://localhost:27017/flow_db_test?replicaSet=rs0
+        # Test-only secrets. These exist solely to satisfy the Zod config
+        # schema (which enforces a 16-char minimum) inside CI.
+        JWT_SECRET: ci-test-only-jwt-secret-not-a-real-key
+        JWT_REFRESH_SECRET: ci-test-only-refresh-secret-not-a-real-key
         REDIS_HOST: localhost
         REDIS_PORT: 6379
 
     - name: Build production bundle
       run: npm run build
+
+    # The frontend was never built in CI, so a broken page could merge freely.
+    - name: Install frontend dependencies
+      working-directory: frontend
+      run: npm ci --legacy-peer-deps
+
+    - name: Build frontend
+      working-directory: frontend
+      run: npm run build
+      env:
+        NEXT_PUBLIC_API_URL: http://localhost:3000

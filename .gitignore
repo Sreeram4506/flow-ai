@@ -8,6 +8,8 @@ frontend/.next/
 .env
 .env.local
 .env.*.local
+.env.docker-backup
+.env.*.backup
 
 # IDE
 .vscode/
@@ -37,3 +39,6 @@ pgadmin_data/
 
 # Uploads (local dev)
 uploads/
+
+# Local database data files
+data/

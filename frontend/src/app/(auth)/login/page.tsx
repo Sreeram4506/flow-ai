@@ -138,11 +138,26 @@ export default function LoginPage() {
           <div className="flex-grow border-t border-slate-800"></div>
         </div>
 
+        {/* Google/GitHub OAuth: the backend routes exist (GET /api/auth/google,
+            /api/auth/github) but no Passport strategy is registered for either
+            provider yet, so hitting them today 500s. Disabled with a tooltip
+            instead of linking to a route that currently errors — see
+            USABILITY_NOTES.md for what's needed to finish this. */}
         <div className="grid grid-cols-2 gap-3 mb-6">
-          <button className="py-2 px-4 bg-slate-900/50 hover:bg-slate-900 border border-slate-800/80 text-slate-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors">
+          <button
+            type="button"
+            disabled
+            title="Coming soon — Google sign-in isn't wired up on the backend yet"
+            className="py-2 px-4 bg-slate-900/30 border border-slate-800/50 text-slate-600 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 cursor-not-allowed"
+          >
             <span>Google</span>
           </button>
-          <button className="py-2 px-4 bg-slate-900/50 hover:bg-slate-900 border border-slate-800/80 text-slate-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors">
+          <button
+            type="button"
+            disabled
+            title="Coming soon — GitHub sign-in isn't wired up on the backend yet"
+            className="py-2 px-4 bg-slate-900/30 border border-slate-800/50 text-slate-600 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 cursor-not-allowed"
+          >
             <span>GitHub</span>
           </button>
         </div>

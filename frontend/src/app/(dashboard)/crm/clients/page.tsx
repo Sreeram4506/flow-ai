@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useEffect, useState } from "react"
+import Link from "next/link"
 import { api } from "@/services/api"
 import { useAuth } from "@/context/AuthContext"
 import { Building2, Plus, Mail, Phone, Globe, DollarSign, Briefcase } from "lucide-react"
@@ -99,7 +100,11 @@ export default function ClientsPage() {
           </div>
         ) : (
           clients.map((client) => (
-            <div key={client.id} className="glass p-6 rounded-2xl border border-border/60 hover:border-violet-500/20 transition-all flex flex-col justify-between h-48 relative group">
+            <Link
+              href={`/crm/clients/${client.id}`}
+              key={client.id}
+              className="glass p-6 rounded-2xl border border-border/60 hover:border-violet-500/20 transition-all flex flex-col justify-between h-48 relative group"
+            >
               <div>
                 <div className="flex items-start justify-between">
                   <h3 className="text-base font-bold text-slate-100 group-hover:text-violet-400 transition-colors truncate max-w-[200px]">
@@ -135,7 +140,7 @@ export default function ClientsPage() {
                   <span>{client._count?.invoices || 0} Invoices</span>
                 </span>
               </div>
-            </div>
+            </Link>
           ))
         )}
       </div>

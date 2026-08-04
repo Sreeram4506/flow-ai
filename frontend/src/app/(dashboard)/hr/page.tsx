@@ -5,7 +5,7 @@ import { api } from "@/services/api"
 import { useAuth } from "@/context/AuthContext"
 import { UserCheck, Plus, CheckCircle, Clock, ShieldAlert, LogOut, ArrowRight, User } from "lucide-react"
 import { formatDate } from "@/lib/utils"
-import { AttendanceStatus } from "@prisma/client"
+import { AttendanceStatus } from "@/lib/enums"
 
 export default function HrPage() {
   const { currentOrg, user } = useAuth()

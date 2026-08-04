@@ -1,4 +1,32 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts", "prisma", "frontend"]
+  "compilerOptions": {
+    // Pinned explicitly so the emitted layout is deterministic. Without it,
+    // TypeScript infers the output root from the common parent of all input
+    // files — and because `prisma.config.ts` sits at the project root, that
+    // parent was the project root, so `src/main.ts` emitted to
+    // `dist/src/main.js` while package.json's start:prod ran `node dist/main`.
+    // Production start was broken as a result. Pinning rootDir to ./src makes
+    // the entrypoint `dist/main.js` (the Nest convention) and turns any future
+    // stray root-level .ts file into a loud compile error rather than a silent
+    // path shift.
+    "rootDir": "./src",
+    // Without this, the incremental cache defaults to the project root
+    // instead of inside dist/. nest-cli.json's `deleteOutDir: true` then
+    // wipes dist/ on each rebuild but leaves that root-level cache behind,
+    // so the next compile sees "nothing changed" and silently emits
+    // nothing -- dist/main.js stays missing even though tsc exits 0.
+    // Keeping the cache inside dist/ means it's wiped in lockstep with the
+    // output it describes.
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
+  },
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "**/*spec.ts",
+    "prisma",
+    "prisma.config.ts",
+    "frontend"
+  ]
 }

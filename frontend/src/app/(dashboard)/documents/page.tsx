@@ -19,9 +19,12 @@ export default function DocumentsPage() {
   
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [fileName, setFileName] = useState("")
-  const [fileUrlInput, setFileUrlInput] = useState("")
-  const [fileSize, setFileSize] = useState("")
-  const [fileType, setFileType] = useState("DOCUMENT")
+  // The real file the user picked. Size/type/URL are now all derived
+  // server-side from these bytes rather than typed in by hand.
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [description, setDescription] = useState("")
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState("")
 
   const [summaryModal, setSummaryModal] = useState<{isOpen: boolean, text: string, docName: string}>({ isOpen: false, text: "", docName: "" })
   const [isSummarizing, setIsSummarizing] = useState(false)
@@ -61,23 +64,53 @@ export default function DocumentsPage() {
     }
   }
 
+  const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // must match MAX_FILE_SIZE_BYTES on the API
+
+  const handleFilePicked = (file: File | null) => {
+    setUploadError("")
+    setSelectedFile(file)
+    // Pre-fill the display name from the filename so the user usually doesn't
+    // have to type anything at all.
+    if (file && !fileName.trim()) {
+      setFileName(file.name.replace(/\.[^.]+$/, ""))
+    }
+  }
+
   const handleUploadDocument = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!selectedFile) {
+      setUploadError("Choose a file to upload.")
+      return
+    }
+    // Checked client-side purely for a fast, clear message — the API enforces
+    // the same limit independently.
+    if (selectedFile.size > MAX_UPLOAD_BYTES) {
+      setUploadError("That file is larger than the 25 MB limit.")
+      return
+    }
+
+    setIsUploading(true)
+    setUploadError("")
     try {
-      await api.post("/api/documents", {
-        name: fileName,
-        fileUrl: fileUrlInput || "https://flow-documents.example.com/" + fileName.toLowerCase().replace(/\s+/g, '-'),
-        fileSize: fileSize ? parseInt(fileSize) * 1024 : 10240, // KB
-        fileType,
-        folderId: selectedFolderId || undefined,
-      })
+      const form = new FormData()
+      form.append("file", selectedFile)
+      if (fileName.trim()) form.append("name", fileName.trim())
+      if (description.trim()) form.append("description", description.trim())
+      if (selectedFolderId) form.append("folderId", selectedFolderId)
+
+      // Content-Type is deliberately not set — the browser must generate it so
+      // it can include the multipart boundary.
+      await api.post("/api/documents", form)
+
       setShowUploadModal(false)
       setFileName("")
-      setFileUrlInput("")
-      setFileSize("")
+      setDescription("")
+      setSelectedFile(null)
       fetchDocuments()
-    } catch (e) {
-      console.error(e)
+    } catch (err: any) {
+      setUploadError(err?.message || "Upload failed. Please try again.")
+    } finally {
+      setIsUploading(false)
     }
   }
 
@@ -273,54 +306,49 @@ export default function DocumentsPage() {
           <div className="w-full max-w-md bg-card border border-border p-6 rounded-2xl shadow-2xl relative">
             <h3 className="text-lg font-bold text-foreground font-heading mb-4">Upload Document</h3>
             <form onSubmit={handleUploadDocument} className="space-y-4">
+              {uploadError && (
+                <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-lg text-red-400 text-xs">
+                  {uploadError}
+                </div>
+              )}
+
               <div>
-                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Document Name</label>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">File</label>
+                <input
+                  type="file"
+                  required
+                  onChange={(e) => handleFilePicked(e.target.files?.[0] ?? null)}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-slate-100 text-sm file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-brand-600 file:text-white hover:file:bg-brand-500 file:cursor-pointer"
+                />
+                {selectedFile && (
+                  <p className="text-[11px] text-slate-400 mt-1.5">
+                    {selectedFile.name} — {(selectedFile.size / 1024).toFixed(0)} KB
+                  </p>
+                )}
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Up to 25 MB. PDF, Office documents, images, text, CSV or ZIP.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Display Name</label>
                 <input
                   type="text"
-                  required
                   value={fileName}
                   onChange={(e) => setFileName(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:border-violet-500 text-sm"
-                  placeholder="Invoice Template..."
+                  placeholder="Defaults to the filename"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">File URL</label>
-                <input
-                  type="url"
-                  value={fileUrlInput}
-                  onChange={(e) => setFileUrlInput(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:border-violet-500 text-sm"
-                  placeholder="https://example.com/file.pdf"
+                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Description</label>
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:border-violet-500 text-sm h-16"
+                  placeholder="Optional"
                 />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">File Size (KB)</label>
-                <input
-                  type="number"
-                  required
-                  value={fileSize}
-                  onChange={(e) => setFileSize(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:border-violet-500 text-sm"
-                  placeholder="512"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase text-slate-400 mb-1">Document Type</label>
-                <select
-                  value={fileType}
-                  onChange={(e) => setFileType(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-slate-100 focus:outline-none focus:border-violet-500 text-sm"
-                >
-                  <option value="DOCUMENT">Document</option>
-                  <option value="IMAGE">Image</option>
-                  <option value="SPREADSHEET">Spreadsheet</option>
-                  <option value="PDF">PDF File</option>
-                  <option value="ARCHIVE">Zip Archive</option>
-                </select>
               </div>
 
               <div className="flex gap-3 justify-end pt-2">
@@ -333,9 +361,17 @@ export default function DocumentsPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold transition-colors"
+                  disabled={isUploading || !selectedFile}
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-colors flex items-center gap-2"
                 >
-                  Upload File
+                  {isUploading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white" />
+                      Uploading...
+                    </>
+                  ) : (
+                    "Upload File"
+                  )}
                 </button>
               </div>
             </form>

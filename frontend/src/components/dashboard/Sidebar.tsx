@@ -35,6 +35,7 @@ export default function Sidebar() {
 
   const navItems = [
     { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+    { label: "AI Agents", href: "/agents", icon: Sparkles },
     { label: "Projects", href: "/projects", icon: FolderKanban },
     { label: "Tasks", href: "/tasks", icon: CheckSquare },
     { label: "Clients (CRM)", href: "/crm/clients", icon: Building2 },

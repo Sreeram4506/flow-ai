@@ -6,7 +6,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   APP_NAME: z.string().default('Flow'),
   APP_URL: z.string().url().default('http://localhost:3000'),
-  FRONTEND_URL: z.string().url().default('http://localhost:4000'),
+  // 3001 is the port the Next.js app actually binds (frontend/package.json).
+  FRONTEND_URL: z.string().url().default('http://localhost:3001'),
 
   // Database
   DATABASE_URL: z.string().url(),
@@ -52,10 +53,48 @@ const envSchema = z.object({
 
   // OpenAI
   OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().default('gpt-4'),
+  OPENAI_MODEL: z.string().default('gpt-5-mini'),
+  OPENAI_IMAGE_MODEL: z.string().default('gpt-image-1-mini'),
+  OPENAI_VIDEO_MODEL: z.string().default('sora-2'),
+  // Reasoning effort for the pipeline's text stages. Low by default because
+  // the stages are mechanical and the pipeline makes 4-6 calls per post, so
+  // latency compounds. Set to '' for non-reasoning models, which reject it.
+  OPENAI_REASONING_EFFORT: z.enum(['', 'minimal', 'low', 'medium', 'high']).default('low'),
+
+  // Which vendor backs the content pipeline's AI stages (research, image,
+  // vision, video). Capability availability is per-key, not just per-vendor:
+  // a free-tier Gemini key can do text but none of the other four.
+  AI_PROVIDER: z.enum(['openai', 'gemini']).default('gemini'),
+  // When both vendors have keys, fall through to the other one if the
+  // preferred provider is out of credit or over its quota.
+  AI_FAILOVER: z
+    .string()
+    .default('true')
+    .transform((v) => v !== 'false'),
 
   // Gemini
   GEMINI_API_KEY: z.string().optional(),
+  // Text model used for research, parsing, prompt-building and captions.
+  // Kept configurable because free-tier per-day quotas differ enormously
+  // between models (gemini-3.6-flash allows 20/day; gemini-2.0-flash far more),
+  // and because model ids get retired for new API keys without notice.
+  TEXT_MODEL: z.string().default('gemini-2.0-flash'),
+
+  // AI Agent Platform
+  AGENT_ENCRYPTION_KEY: z.string().min(32).optional(), // 32+ chars, used for AES-256-GCM token encryption
+  IMAGE_PROVIDER: z.enum(['gemini', 'openai', 'none']).default('gemini'),
+  // Gemini-native image output. The older `imagen-3.0-*` models are retired for
+  // API keys created after their cutoff, so they can't be the default any more
+  // (ImageService still falls back to Imagen for older keys that have access).
+  IMAGE_MODEL: z.string().default('gemini-2.5-flash-image'),
+  VIDEO_MODEL: z.string().default('veo-3.1-fast-generate-preview'),
+  META_APP_ID: z.string().optional(),
+  META_APP_SECRET: z.string().optional(),
+  META_REDIRECT_URL: z.string().optional(),
+  LINKEDIN_CLIENT_ID: z.string().optional(),
+  LINKEDIN_CLIENT_SECRET: z.string().optional(),
+  LINKEDIN_REDIRECT_URL: z.string().optional(),
+  PUBLIC_ASSETS_BASE_URL: z.string().optional(), // public base URL where generated images are hosted
 
   // 2FA
   TWO_FACTOR_APP_NAME: z.string().default('Flow'),
@@ -65,7 +104,7 @@ const envSchema = z.object({
   THROTTLE_LIMIT: z.coerce.number().default(100),
 
   // CORS
-  CORS_ORIGINS: z.string().default('http://localhost:4000'),
+  CORS_ORIGINS: z.string().default('http://localhost:3001,http://localhost:3000'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -138,12 +177,35 @@ export default () => {
       secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
       s3Bucket: env.AWS_S3_BUCKET,
     },
+    aiProvider: env.AI_PROVIDER,
+    aiFailover: env.AI_FAILOVER,
     openai: {
       apiKey: env.OPENAI_API_KEY,
       model: env.OPENAI_MODEL,
+      imageModel: env.OPENAI_IMAGE_MODEL,
+      videoModel: env.OPENAI_VIDEO_MODEL,
+      reasoningEffort: env.OPENAI_REASONING_EFFORT,
     },
     gemini: {
       apiKey: env.GEMINI_API_KEY,
+      textModel: env.TEXT_MODEL,
+    },
+    agents: {
+      encryptionKey: env.AGENT_ENCRYPTION_KEY,
+      imageProvider: env.IMAGE_PROVIDER,
+      imageModel: env.IMAGE_MODEL,
+      videoModel: env.VIDEO_MODEL,
+      publicAssetsBaseUrl: env.PUBLIC_ASSETS_BASE_URL,
+      meta: {
+        appId: env.META_APP_ID,
+        appSecret: env.META_APP_SECRET,
+        redirectUrl: env.META_REDIRECT_URL,
+      },
+      linkedin: {
+        clientId: env.LINKEDIN_CLIENT_ID,
+        clientSecret: env.LINKEDIN_CLIENT_SECRET,
+        redirectUrl: env.LINKEDIN_REDIRECT_URL,
+      },
     },
     twoFactor: {
       appName: env.TWO_FACTOR_APP_NAME,

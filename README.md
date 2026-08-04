@@ -1,173 +1,141 @@
-# Flow – Enterprise SaaS Project Management Platform Backend
+# Flow — Enterprise SaaS Business Management Platform
 
-Flow is a world-class, enterprise-grade AI-powered Business Management Platform designed to streamline business operations for freelancers, agencies, startups, and enterprises. This repository contains the complete NestJS backend built with Clean Architecture principles.
+Flow is a multi-tenant business management platform for freelancers, agencies and small enterprises: CRM, projects and tasks, time tracking, quotations and invoicing, HR, documents, and an AI agent layer. This repository contains the NestJS backend and the Next.js dashboard.
 
-## 🚀 Features
-
-- **Multi-Tenant SaaS Architecture**: Isolation by organization via `organizationId` scopes.
-- **Robust Authentication & Security**: Email/Password, Magic Link, OAuth (Google, GitHub, Microsoft), Two-Factor Authentication (TOTP), session & device management, JWT rotation.
-- **Enterprise-Grade CRM**: Manage clients, primary & secondary contacts, communications, history, and client portals.
-- **Pipeline-Based Lead Management**: Leads with stage tracking, notes, meeting logs, follow-ups, and AI scoring.
-- **Advanced Project & Task Management**: Budget tracking, timelines, milestones, task dependencies, subtasks, checklists, and Kanban view.
-- **Time Tracking**: Live timers, manual log entries, billable/non-billable categorization, and user productivity stats.
-- **Professional Quotations & Invoicing**: Auto-numbering, tax/discount calculation, digital signatures, one-click Quotation ➔ Project ➔ Invoice conversion.
-- **Payments & Expenses**: Log transactions, link to invoices, categorize expenses, and track organization cash flow.
-- **HR & Employee Directory**: Employee profiles, digital Check-In/Check-Out attendance, leave requests with approval workflow.
-- **Document Management**: Folder structure, document upload records, and file version history.
-- **AI Assistant**: Intelligent suggestions, chat interface, automated task creation from project scope, delay prediction, pricing suggestions.
-- **Global Search**: Multi-entity instant search querying across clients, projects, tasks, invoices, quotations, documents, and leads.
-- **Real-Time Communication**: WebSocket gateway (Socket.io) supporting message rooms for organizations, projects, and chat channels.
+> **Project status:** actively developed, not yet production-hardened. See [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md) for the current gap analysis and [`USABILITY_NOTES.md`](./USABILITY_NOTES.md) for known product gaps. Read both before deploying this anywhere real.
 
 ---
 
-## 🛠️ Tech Stack
+## Quick start
 
-- **Framework**: NestJS (v10) with TypeScript
-- **Database**: MongoDB (Atlas-ready)
-- **ORM**: Prisma ORM (v6)
-- **Cache & Socket Broker**: Redis
-- **Security & Utilities**: Helmet, Compression, Passport.js, Otplib, Zod, Class-Validator
-- **API Documentation**: Swagger / OpenAPI (auto-generated)
-- **Real-time Gateway**: Socket.IO
+**Prerequisites:** Node.js 20+, and either Docker (recommended) or your own MongoDB **replica set** + Redis.
+
+MongoDB must run as a replica set — Prisma requires it for transactions, which the seed script uses. A standalone `mongod` will fail at seeding.
+
+```bash
+# 1. Backing services (MongoDB replica set + Redis, correctly configured)
+docker compose up -d mongo redis
+
+# 2. Backend
+npm install
+cp .env.example .env          # then set JWT_SECRET / JWT_REFRESH_SECRET
+npx prisma generate
+npx prisma db push            # MongoDB uses schema sync, not SQL migrations
+npx prisma db seed            # optional demo data
+npm run start:dev
+
+# 3. Frontend (separate terminal)
+cd frontend
+npm install --legacy-peer-deps
+cp .env.example .env.local
+npm run dev
+```
+
+| Service | URL |
+|---|---|
+| API | http://localhost:3000 |
+| API docs (Swagger) | http://localhost:3000/api/docs |
+| Health / readiness | http://localhost:3000/health · `/health/ready` |
+| WebSocket gateway | ws://localhost:3000/ws |
+| Dashboard | http://localhost:3001 |
+
+The frontend port (3001) must appear in the backend's `CORS_ORIGINS`, or every request from the dashboard fails at the browser.
+
+### Running the whole stack in Docker
+
+```bash
+docker compose up --build
+```
 
 ---
 
-## 🏗️ Folder Structure
+## Configuration
+
+All environment variables are validated at boot by a Zod schema in `src/config/configuration.ts` — the app refuses to start on invalid config rather than failing later at runtime. `.env.example` documents every variable.
+
+The essential ones:
+
+| Variable | Notes |
+|---|---|
+| `DATABASE_URL` | MongoDB connection string. Replica set required. |
+| `REDIS_HOST` / `REDIS_PORT` | Used for sessions, caching, rate limiting, and login lockout. |
+| `JWT_SECRET` / `JWT_REFRESH_SECRET` | Minimum 16 characters. Generate real values; never ship the examples. |
+| `CORS_ORIGINS` | Comma-separated browser origins. Must include the frontend URL. |
+| `FRONTEND_URL` | Used in email links (magic link, password reset, invites). |
+
+Secrets belong in a secret manager in any deployed environment, not in a `.env` file on disk.
+
+---
+
+## Architecture
 
 ```
 src/
-├── common/                # Shared utilities, decorators, guards, filters, pipes, types
-│   ├── decorators/        # Custom decorators (@CurrentUser, @Roles, @OrgId, @Public)
-│   ├── dto/               # Global DTOs (PaginationDto)
-│   ├── filters/           # GlobalExceptionFilter
-│   ├── guards/            # JwtAuthGuard, RolesGuard, TenantGuard
-│   ├── interceptors/      # LoggingInterceptor, TransformInterceptor
-│   └── utils/             # Helper utilities (slugify, pagination wrapper)
-├── config/                # Environment configuration using Zod validation
-├── database/              # Global PrismaService and RedisService
-├── gateway/               # Socket.IO Gateway for real-time channels and notifications
-├── modules/               # 20+ Domain Feature Modules
-│   ├── ai/                # AI automation and insights
-│   ├── analytics/         # Reports & charts calculation
-│   ├── auth/              # Complete OAuth, MFA, MagicLink, and JWT Auth
-│   ├── clients/           # CRM Client records & contacts
-│   ├── projects/          # Projects, milestones, and members
-│   ├── tasks/             # Tasks, checklists, dependencies, comments
-│   └── ...                # Other business domains (invoices, payments, HR, etc.)
-├── app.module.ts          # Core application module configuring global guards/interceptors
-└── main.ts                # Application bootstrap
+├── common/           Shared building blocks
+│   ├── cache/        Redis-backed tenant membership cache
+│   ├── decorators/   @CurrentUser, @Roles, @OrgId, @Public
+│   ├── filters/      GlobalExceptionFilter
+│   ├── guards/       RolesGuard, TenantGuard
+│   ├── interceptors/ Logging (JSON in prod), response envelope
+│   └── middleware/   Request-ID correlation
+├── config/           Zod-validated environment configuration
+├── database/         PrismaService, RedisService (global module)
+├── gateway/          Socket.IO real-time gateway
+├── modules/          Feature modules (auth, projects, tasks, invoices, HR, AI agents, …)
+└── main.ts           Bootstrap: helmet, CORS, validation, Swagger, static uploads
+
+frontend/src/
+├── app/(auth)/       Login, register, magic link, password reset
+├── app/(dashboard)/  Authenticated app shell and feature pages
+├── context/          Auth, Socket, Theme providers
+├── lib/              Enums mirroring the Prisma schema, toast bus, helpers
+└── services/api.ts   Axios instance: auth headers, token refresh, error toasts
 ```
 
----
+### Multi-tenancy
 
-## 📥 Getting Started
+Every business record is scoped by `organizationId`. Org-scoped routes are protected by `TenantGuard`, which resolves the caller's membership from the `x-organization-id` header and attaches their role to the request. Memberships are cached in Redis and explicitly invalidated whenever a role changes or a member is removed, so revocation takes effect immediately across all instances.
 
-### Prerequisites
+This is the most security-sensitive part of the codebase. It is covered by unit tests (`src/common/guards/*.spec.ts`) and end-to-end tests (`test/tenant-isolation.e2e-spec.ts`). **Keep both passing.**
 
-- Node.js (v20+ recommended)
-- MongoDB Replica Set (e.g. MongoDB Atlas)
-- Redis
+### API conventions
 
-### Installation & Configuration
-
-1. Install dependencies for both the backend (root) and frontend:
-   ```bash
-   # Root backend installation
-   npm install
-
-   # Navigate and install frontend dependencies
-   cd frontend
-   npm install --legacy-peer-deps
-   cd ..
-   ```
-
-2. Setup environment variables:
-   ```bash
-   cp .env.example .env
-   ```
-   *Edit `.env` and fill in your MongoDB connection string (starts with `mongodb+srv://` or `mongodb://`) and Redis configurations.*
-
-### Database Initialization
-
-1. Generate the Prisma MongoDB Client:
-   ```bash
-   npx prisma generate
-   ```
-
-2. Seed the database with comprehensive demo data:
-   ```bash
-   npx prisma db seed
-   ```
-   *Note: MongoDB transactions (used in seeding) require a Replica Set deployment (like MongoDB Atlas).*
-
-### Starting the Project
-
-You must start both the backend server and the frontend client:
-
-#### 1. Start Backend API
-- **Location**: Root directory (`/`)
-- **Command**:
-  ```bash
-  npm run start:dev
-  ```
-- **Port**: `3000` (API live at: `http://localhost:3000`, Swagger documentation: `http://localhost:3000/api/docs`)
-
-#### 2. Start Frontend Dashboard Portal
-- **Location**: `/frontend` subdirectory
-- **Command**:
-  ```bash
-  cd frontend
-  npm run dev
-  ```
-- **Port**: `3001` (Client portal live at: `http://localhost:3001`)
+- Responses are wrapped: `{ success, data, meta?, timestamp }`.
+- Errors carry a `requestId` matching the server log line — quote it in bug reports.
+- Auth: `Authorization: Bearer <token>`. Org-scoped routes also need `x-organization-id`.
 
 ---
 
-## 📚 API & Real-time Documentation
+## Testing
 
-- **Swagger REST Docs**: Open `http://localhost:3000/api/docs` in your browser. All endpoint request payloads, auth rules, and responses are documented.
-- **WebSockets / Gateway**: Connect to `ws://localhost:3000/ws`. Real-time event streams listen for `notification`, `task-update`, `new-message`, and `dashboard-update`.
+```bash
+npm run test          # unit tests
+npm run test:e2e      # end-to-end (needs MongoDB + Redis running)
+npm run test:cov      # coverage
+```
 
----
-
-## 🧪 Testing
-
-- Run unit tests:
-  ```bash
-  npm run test
-  ```
-
-- Run end-to-end tests:
-  ```bash
-  npm run test:e2e
-  ```
-
-- Code coverage report:
-  ```bash
-  npm run test:cov
-  ```
+CI (`.github/workflows/ci.yml`) runs lint, unit tests, e2e tests against a real MongoDB replica set and Redis, and builds both backend and frontend.
 
 ---
 
-## 🚢 Production Deployment Guide
+## Deployment
 
-### Deploying to Production (Docker-Based)
+```bash
+docker build -t flow-backend:latest .
+```
 
-Flow is configured for containerized container systems (AWS ECS, GCP Cloud Run, or Railway).
+The image is a multi-stage build on Alpine Node 20, runs as an unprivileged `nestjs` user, and uses `dumb-init` for correct signal handling so shutdown hooks run.
 
-1. Build the production Docker image:
-   ```bash
-   docker build -t flow-backend:latest .
-   ```
-   *This Dockerfile leverages a multi-stage build, generating an optimized lightweight image running under a non-root user (`nestjs`) on Alpine Node v20.*
+Before going live, work through [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md). The critical items are: move auth tokens out of `localStorage` into httpOnly cookies, put real secrets in a secret manager, and decide whether the payments module needs a real Stripe integration or should be relabelled as manual payment logging.
 
-2. Run migrations before boot:
-   ```bash
-   npx prisma migrate deploy
-   ```
+Point orchestrator probes at:
+- `/health` — liveness. Never touches dependencies, so a database blip won't cause a restart loop.
+- `/health/ready` — readiness. Returns 503 when MongoDB or Redis is unreachable.
 
-3. Set the required production environment variables:
-   - Ensure `NODE_ENV=production`
-   - Configure MongoDB connection URL
-   - Set persistent Redis cluster hosts
-   - Set strong keys for `JWT_SECRET` and `JWT_REFRESH_SECRET`
+---
+
+## Contributing
+
+- `npm run lint` and `npm run format` before committing. CI fails on lint errors and warnings.
+- New org-scoped endpoints must use `@UseGuards(TenantGuard)` and scope every query by `organizationId`.
+- Frontend enums live in `frontend/src/lib/enums.ts` and mirror `prisma/schema.prisma` — update both together.

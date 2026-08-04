@@ -5,7 +5,7 @@ import { api } from "@/services/api"
 import { useAuth } from "@/context/AuthContext"
 import { FileSpreadsheet, Plus, DollarSign, Clock, FileCheck, CheckCircle2, ChevronRight, X } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
-import { InvoiceStatus, PaymentMethod } from "@prisma/client"
+import { InvoiceStatus, PaymentMethod } from "@/lib/enums"
 
 export default function InvoicesPage() {
   const { currentOrg } = useAuth()

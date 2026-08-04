@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useEffect, useState } from "react"
+import Link from "next/link"
 import { api } from "../../../services/api"
 import { useAuth } from "../../../context/AuthContext"
 import { FolderKanban, Plus, Clock, Briefcase, DollarSign, CheckCircle2 } from "lucide-react"
@@ -122,7 +123,11 @@ export default function ProjectsPage() {
           </div>
         ) : (
           projects.map((proj) => (
-            <div key={proj.id} className="glass p-6 rounded-2xl border border-border/60 hover:border-violet-500/20 transition-all flex flex-col justify-between h-56 relative group">
+            <Link
+              href={`/projects/${proj.id}`}
+              key={proj.id}
+              className="glass p-6 rounded-2xl border border-border/60 hover:border-violet-500/20 transition-all flex flex-col justify-between h-56 relative group"
+            >
               <div>
                 <div className="flex justify-between items-start">
                   <h3 className="text-base font-bold text-slate-100 group-hover:text-violet-400 transition-colors truncate max-w-[180px]">{proj.name}</h3>
@@ -160,7 +165,7 @@ export default function ProjectsPage() {
                   </span>
                 </div>
               </div>
-            </div>
+            </Link>
           ))
         )}
       </div>

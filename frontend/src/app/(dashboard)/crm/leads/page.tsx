@@ -5,7 +5,7 @@ import { api } from "@/services/api"
 import { useAuth } from "@/context/AuthContext"
 import { PhoneCall, Plus, DollarSign, Target, ChevronRight, X, TrendingUp } from "lucide-react"
 import { formatCurrency } from "@/lib/utils"
-import { LeadStage } from "@prisma/client"
+import { LeadStage } from "@/lib/enums"
 
 export default function LeadsPage() {
   const { currentOrg } = useAuth()

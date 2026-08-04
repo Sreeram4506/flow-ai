@@ -8,7 +8,7 @@ import {
   CheckSquare, Plus, Clock, Play, Pause, ChevronRight, X, Sparkles, MessageSquare, ListTodo, Paperclip, Loader
 } from "lucide-react"
 import { formatDate } from "../../../lib/utils"
-import { TaskStatus, TaskPriority } from "@prisma/client"
+import { TaskStatus, TaskPriority } from "@/lib/enums"
 
 export default function TasksPage() {
   const { currentOrg, user } = useAuth()
@@ -209,6 +209,55 @@ export default function TasksPage() {
     }
   }
 
+  // ---- Drag & drop between columns ----
+  // Uses the native HTML5 drag events rather than pulling in a DnD library:
+  // no new dependency, and the board only needs card-to-column moves.
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null)
+  const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null)
+
+  const handleDragStart = (e: React.DragEvent, taskId: string) => {
+    setDraggingTaskId(taskId)
+    e.dataTransfer.effectAllowed = "move"
+    // Required for Firefox to initiate a drag at all.
+    e.dataTransfer.setData("text/plain", taskId)
+  }
+
+  const handleDragEnd = () => {
+    setDraggingTaskId(null)
+    setDragOverStatus(null)
+  }
+
+  const handleDragOver = (e: React.DragEvent, status: TaskStatus) => {
+    // Without preventDefault the browser refuses the drop outright.
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "move"
+    if (dragOverStatus !== status) setDragOverStatus(status)
+  }
+
+  const handleDrop = async (e: React.DragEvent, status: TaskStatus) => {
+    e.preventDefault()
+    const taskId = draggingTaskId || e.dataTransfer.getData("text/plain")
+    setDraggingTaskId(null)
+    setDragOverStatus(null)
+    if (!taskId) return
+
+    const task = tasks.find((t) => t.id === taskId)
+    if (!task || task.status === status) return
+
+    // Optimistic: the card moves the instant it's dropped. Snapping back only
+    // on failure feels far better than a spinner on every drag.
+    const previous = tasks
+    setTasks((current) =>
+      current.map((t) => (t.id === taskId ? { ...t, status } : t)),
+    )
+
+    try {
+      await api.patch(`/api/tasks/${taskId}`, { status })
+    } catch {
+      setTasks(previous) // error toast already raised by the interceptor
+    }
+  }
+
   const formatSeconds = (totalSecs: number) => {
     const hrs = Math.floor(totalSecs / 3600)
     const mins = Math.floor((totalSecs % 3600) / 60)
@@ -269,8 +318,19 @@ export default function TasksPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {statuses.map((status) => {
           const colTasks = tasks.filter((t) => t.status === status)
+          const isDropTarget = dragOverStatus === status
           return (
-            <div key={status} className="flex flex-col bg-slate-950/20 border border-border/40 p-4 rounded-2xl h-fit">
+            <div
+              key={status}
+              onDragOver={(e) => handleDragOver(e, status)}
+              onDragLeave={() => setDragOverStatus((s) => (s === status ? null : s))}
+              onDrop={(e) => handleDrop(e, status)}
+              className={`flex flex-col border p-4 rounded-2xl h-fit transition-colors ${
+                isDropTarget
+                  ? "bg-violet-500/10 border-violet-500/40"
+                  : "bg-slate-950/20 border-border/40"
+              }`}
+            >
               <div className="flex items-center justify-between mb-4 pb-2 border-b border-border/30">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400">{status}</span>
                 <span className="text-[10px] bg-slate-900 border border-border px-1.5 py-0.5 rounded text-muted font-bold">
@@ -280,11 +340,28 @@ export default function TasksPage() {
 
               {/* Tasks List */}
               <div className="space-y-3 min-h-[300px]">
+                {colTasks.length === 0 && (
+                  <div
+                    className={`h-24 rounded-xl border border-dashed flex items-center justify-center text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                      isDropTarget
+                        ? "border-violet-500/50 text-violet-400"
+                        : "border-border/40 text-slate-600"
+                    }`}
+                  >
+                    {isDropTarget ? "Release to move here" : "Drop tasks here"}
+                  </div>
+                )}
                 {colTasks.map((task) => (
-                  <div 
-                    key={task.id} 
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, task.id)}
+                    onDragEnd={handleDragEnd}
                     onClick={() => handleOpenDrawer(task)}
-                    className="bg-card border border-border/60 hover:border-violet-500/20 p-4 rounded-xl shadow-premium cursor-pointer transition-all hover:translate-y-[-2px] relative group"
+                    title="Drag to change status, or click to open"
+                    className={`bg-card border border-border/60 hover:border-violet-500/20 p-4 rounded-xl shadow-premium cursor-grab active:cursor-grabbing transition-all hover:translate-y-[-2px] relative group ${
+                      draggingTaskId === task.id ? "opacity-40" : ""
+                    }`}
                   >
                     <div className="flex justify-between items-start gap-2 mb-2">
                       <h4 className="text-xs font-bold leading-snug text-slate-100 group-hover:text-violet-400 transition-colors line-clamp-2">

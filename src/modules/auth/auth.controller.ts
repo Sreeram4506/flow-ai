@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import {
   RegisterDto,
@@ -27,6 +28,22 @@ import {
 } from './dto';
 import { CurrentUser, Public } from '../../common/decorators';
 
+/**
+ * Per-route rate limits for credential-accepting endpoints.
+ *
+ * The app-wide default is 100 requests / 60s, which is far too generous for
+ * auth: it permits ~144k password guesses a day from a single IP. These are
+ * the per-IP ceilings for the endpoints an attacker actually targets. They
+ * work alongside the per-account lockout in AuthService — the throttle caps
+ * one source, the lockout protects one account from a distributed attempt.
+ */
+const THROTTLE_LOGIN = { default: { limit: 5, ttl: 60_000 } };
+const THROTTLE_REGISTER = { default: { limit: 5, ttl: 3_600_000 } };
+// Anything that sends an email is also an outbound-spam vector, not just a
+// guessing vector — keep these tight regardless of credential risk.
+const THROTTLE_EMAIL_SEND = { default: { limit: 3, ttl: 900_000 } };
+const THROTTLE_TOKEN_SUBMIT = { default: { limit: 10, ttl: 900_000 } };
+
 @ApiTags('Authentication')
 @Controller('api/auth')
 export class AuthController {
@@ -35,25 +52,30 @@ export class AuthController {
   // ---- Registration & Login ----
 
   @Public()
+  @Throttle(THROTTLE_REGISTER)
   @Post('register')
   @ApiOperation({ summary: 'Register a new user' })
   @ApiResponse({ status: 201, description: 'User registered successfully' })
   @ApiResponse({ status: 409, description: 'Email already exists' })
+  @ApiResponse({ status: 429, description: 'Too many registration attempts' })
   async register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
   @Public()
+  @Throttle(THROTTLE_LOGIN)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with email and password' })
   @ApiResponse({ status: 200, description: 'Login successful' })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  @ApiResponse({ status: 429, description: 'Too many attempts — temporarily locked' })
   async login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
 
   @Public()
+  @Throttle(THROTTLE_TOKEN_SUBMIT)
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })
@@ -85,6 +107,7 @@ export class AuthController {
   // ---- Password ----
 
   @Public()
+  @Throttle(THROTTLE_EMAIL_SEND)
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request password reset email' })
@@ -93,6 +116,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle(THROTTLE_TOKEN_SUBMIT)
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reset password with token' })
@@ -114,6 +138,7 @@ export class AuthController {
   // ---- Magic Link ----
 
   @Public()
+  @Throttle(THROTTLE_EMAIL_SEND)
   @Post('magic-link')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send magic login link' })
@@ -122,6 +147,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle(THROTTLE_TOKEN_SUBMIT)
   @Post('magic-link/verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify magic link and login' })
@@ -132,6 +158,7 @@ export class AuthController {
   // ---- Email Verification ----
 
   @Public()
+  @Throttle(THROTTLE_TOKEN_SUBMIT)
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify email address' })
@@ -157,6 +184,9 @@ export class AuthController {
   }
 
   @Public()
+  // A TOTP code is only 6 digits — without a limit the whole keyspace is
+  // walkable in minutes, which would defeat the point of having 2FA at all.
+  @Throttle(THROTTLE_LOGIN)
   @Post('2fa/verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify 2FA code during login' })

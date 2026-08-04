@@ -1,0 +1,80 @@
+# Local development stack: MongoDB (single-node replica set) + Redis + API.
+#
+# The replica set is not optional — Prisma requires it for transactions, which
+# prisma/seed.ts uses. A plain `mongo:7` container without --replSet will fail
+# at seed time, which is exactly the wall a new contributor hits otherwise.
+#
+#   docker compose up -d mongo redis   # just the backing services
+#   docker compose up --build          # the whole stack including the API
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: flow-mongo
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      # Host 27017 is already taken by a native MongoDB Windows service on this
+      # machine, so the container is published on 27018 instead.
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      # Initiates the replica set on first boot, then reports healthy once
+      # the node has actually become PRIMARY (rs.initiate is async).
+      test: >
+        mongosh --quiet --eval "
+          try { rs.status().ok }
+          catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}) }
+        "
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: flow-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flow-api
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # `directConnection=true` is required when talking to a single-node
+      # replica set by container hostname, otherwise the driver tries to
+      # reach the node by the hostname in the rs config ("localhost").
+      DATABASE_URL: mongodb://mongo:27017/flow_db?replicaSet=rs0&directConnection=true
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      # Dev-only placeholder secrets. Real deployments must inject these from
+      # a secret manager — never commit real values here.
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-change-me-32chars}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-only-refresh-secret-change-me-32c}
+      FRONTEND_URL: http://localhost:3001
+      CORS_ORIGINS: http://localhost:3001
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+  redis_data:

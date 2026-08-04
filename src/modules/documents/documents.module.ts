@@ -1,7 +1,26 @@
 // ================ DOCUMENTS MODULE ================
-import { Module, Injectable, Controller, NotFoundException, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsOptional, IsString, IsBoolean } from 'class-validator';
+import {
+  Module,
+  Injectable,
+  Controller,
+  NotFoundException,
+  BadRequestException,
+  UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  Inject,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiConsumes,
+  ApiBody,
+} from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { IsNotEmpty, IsOptional, IsString, IsBooleanString } from 'class-validator';
 import { Get, Post, Delete, Body, Param, Query } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { PaginationDto } from '../../common/dto';
@@ -9,25 +28,49 @@ import { CurrentUser, OrgId } from '../../common/decorators';
 import { TenantGuard } from '../../common/guards';
 import { paginate } from '../../common/utils';
 import { FileType } from '@prisma/client';
+import { LocalStorageDriver } from './storage/local-storage.driver';
+import {
+  StorageDriver,
+  STORAGE_DRIVER,
+  MAX_FILE_SIZE_BYTES,
+  ALLOWED_MIME_TYPES,
+  mimeToFileType,
+} from './storage/storage.types';
 
 export class CreateFolderDto {
   @ApiProperty() @IsString() @IsNotEmpty() name: string;
   @ApiPropertyOptional() @IsOptional() @IsString() parentId?: string;
 }
-export class UploadDocumentDto {
-  @ApiProperty() @IsString() @IsNotEmpty() name: string;
+
+/**
+ * Metadata accompanying a multipart upload.
+ *
+ * Everything about the *file itself* (size, MIME type, URL) is derived
+ * server-side from the actual bytes received — the client only supplies
+ * descriptive fields. Previously the client sent `fileUrl` and `fileSize`
+ * directly, which meant "upload" was really "assert that a file exists
+ * somewhere", with no validation possible.
+ *
+ * Note the fields are strings: multipart form fields always arrive as strings,
+ * so a plain @IsBoolean() here would reject the literal "true" a browser sends.
+ */
+export class UploadDocumentMetaDto {
+  @ApiPropertyOptional({ description: 'Defaults to the uploaded filename' })
+  @IsOptional() @IsString() name?: string;
+
   @ApiPropertyOptional() @IsOptional() @IsString() description?: string;
-  @ApiProperty() @IsString() @IsNotEmpty() fileUrl: string;
-  @ApiProperty() fileSize: number;
-  @ApiPropertyOptional({ enum: FileType }) @IsOptional() @IsEnum(FileType) fileType?: FileType;
-  @ApiPropertyOptional() @IsOptional() @IsString() mimeType?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() folderId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPublic?: boolean;
+
+  @ApiPropertyOptional({ enum: ['true', 'false'] })
+  @IsOptional() @IsBooleanString() isPublic?: string;
 }
 
 @Injectable()
 export class DocumentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(STORAGE_DRIVER) private readonly storage: StorageDriver,
+  ) {}
 
   async createFolder(orgId: string, dto: CreateFolderDto) {
     return this.prisma.folder.create({ data: { ...dto, organizationId: orgId } });
@@ -41,8 +84,49 @@ export class DocumentsService {
     });
   }
 
-  async upload(orgId: string, userId: string, dto: UploadDocumentDto) {
-    return this.prisma.document.create({ data: { ...dto, organizationId: orgId, uploadedById: userId } });
+  /**
+   * Persists an actual uploaded file, then records it.
+   *
+   * If the DB write fails after the bytes have landed, the stored object is
+   * removed — otherwise every failed upload would leak an orphaned file that
+   * nothing references and nothing ever cleans up.
+   */
+  async uploadFile(
+    orgId: string,
+    userId: string,
+    file: Express.Multer.File,
+    meta: UploadDocumentMetaDto,
+  ) {
+    if (meta.folderId) {
+      const folder = await this.prisma.folder.findFirst({
+        where: { id: meta.folderId, organizationId: orgId },
+      });
+      // Without this check a caller could file a document into another
+      // organization's folder by guessing an ID.
+      if (!folder) throw new NotFoundException('Folder not found');
+    }
+
+    const stored = await this.storage.save(file, { organizationId: orgId });
+
+    try {
+      return await this.prisma.document.create({
+        data: {
+          organizationId: orgId,
+          uploadedById: userId,
+          name: meta.name?.trim() || stored.originalName,
+          description: meta.description,
+          folderId: meta.folderId || undefined,
+          isPublic: meta.isPublic === 'true',
+          fileUrl: stored.url,
+          fileSize: stored.size,
+          mimeType: stored.mimeType,
+          fileType: mimeToFileType(stored.mimeType) as FileType,
+        },
+      });
+    } catch (err) {
+      await this.storage.delete(stored.key);
+      throw err;
+    }
   }
 
   async findAll(orgId: string, query: PaginationDto & { folderId?: string }) {
@@ -62,11 +146,40 @@ export class DocumentsService {
     return doc;
   }
 
-  async createVersion(orgId: string, id: string, fileUrl: string, fileSize: number, changeNote?: string) {
+  /** Uploads a replacement file and bumps the version, keeping history. */
+  async createVersion(
+    orgId: string,
+    id: string,
+    file: Express.Multer.File,
+    changeNote?: string,
+  ) {
     const doc = await this.findOne(orgId, id);
+    const stored = await this.storage.save(file, { organizationId: orgId });
     const newVersion = doc.version + 1;
-    await this.prisma.documentVersion.create({ data: { documentId: id, version: newVersion, fileUrl, fileSize, changeNote } });
-    return this.prisma.document.update({ where: { id }, data: { fileUrl, fileSize, version: newVersion } });
+
+    try {
+      await this.prisma.documentVersion.create({
+        data: {
+          documentId: id,
+          version: newVersion,
+          fileUrl: stored.url,
+          fileSize: stored.size,
+          changeNote,
+        },
+      });
+      return await this.prisma.document.update({
+        where: { id },
+        data: {
+          fileUrl: stored.url,
+          fileSize: stored.size,
+          mimeType: stored.mimeType,
+          version: newVersion,
+        },
+      });
+    } catch (err) {
+      await this.storage.delete(stored.key);
+      throw err;
+    }
   }
 
   async delete(orgId: string, id: string) {
@@ -88,8 +201,84 @@ export class DocumentsController {
   @Get('folders') @ApiOperation({ summary: 'List folders' })
   getFolders(@OrgId() orgId: string, @Query('parentId') parentId?: string) { return this.service.getFolders(orgId, parentId); }
 
-  @Post() @ApiOperation({ summary: 'Upload document' })
-  upload(@OrgId() orgId: string, @CurrentUser('id') userId: string, @Body() dto: UploadDocumentDto) { return this.service.upload(orgId, userId, dto); }
+  @Post()
+  @ApiOperation({ summary: 'Upload a document (multipart/form-data)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        folderId: { type: 'string' },
+        isPublic: { type: 'string', enum: ['true', 'false'] },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1 },
+      fileFilter: (_req, file, cb) => {
+        // Rejected at the stream level so a disallowed type never gets fully
+        // buffered into memory.
+        if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+          return cb(
+            new BadRequestException(`Unsupported file type: ${file.mimetype}`),
+            false,
+          );
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  upload(
+    @OrgId() orgId: string,
+    @CurrentUser('id') userId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() meta: UploadDocumentMetaDto,
+  ) {
+    if (!file) throw new BadRequestException('No file was uploaded');
+    return this.service.uploadFile(orgId, userId, file, meta);
+  }
+
+  @Post(':id/versions')
+  @ApiOperation({ summary: 'Upload a new version of an existing document' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        changeNote: { type: 'string' },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1 },
+      fileFilter: (_req, file, cb) => {
+        if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+          return cb(
+            new BadRequestException(`Unsupported file type: ${file.mimetype}`),
+            false,
+          );
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  createVersion(
+    @OrgId() orgId: string,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('changeNote') changeNote?: string,
+  ) {
+    if (!file) throw new BadRequestException('No file was uploaded');
+    return this.service.createVersion(orgId, id, file, changeNote);
+  }
 
   @Get() @ApiOperation({ summary: 'List documents' })
   findAll(@OrgId() orgId: string, @Query() query: PaginationDto) { return this.service.findAll(orgId, query); }
@@ -101,5 +290,14 @@ export class DocumentsController {
   delete(@OrgId() orgId: string, @Param('id') id: string) { return this.service.delete(orgId, id); }
 }
 
-@Module({ controllers: [DocumentsController], providers: [DocumentsService], exports: [DocumentsService] })
+@Module({
+  controllers: [DocumentsController],
+  providers: [
+    DocumentsService,
+    // Swap this binding for an S3 driver in production — nothing else in the
+    // module needs to change (see storage/storage.types.ts).
+    { provide: STORAGE_DRIVER, useClass: LocalStorageDriver },
+  ],
+  exports: [DocumentsService],
+})
 export class DocumentsModule {}

@@ -1,7 +1,7 @@
-import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiHeader } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
-import { OrgId, CurrentUser } from '../common/decorators';
+import { OrgId } from '../common/decorators';
 import { TenantGuard } from '../common/guards';
 
 @ApiTags('Chat')
